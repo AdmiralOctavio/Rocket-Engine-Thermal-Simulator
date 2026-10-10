@@ -18,7 +18,7 @@ sudo apt-get install python3-pip
 
 # install python libraries
 pip3 install scipy
-pip3 install thermo
+pip3 install CoolProp
 pip3 install matplotlib
 pip3 install fipy
 pip3 install rocketcea

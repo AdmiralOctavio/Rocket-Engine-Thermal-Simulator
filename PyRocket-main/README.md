@@ -50,7 +50,7 @@ mesh resolution settings.
 ## Using PyRocket
 PyRocket is designed to be used with nearly arbitrary combinations of propellants, cooling fluids and chamber materials. All inputs are changed in config.py 
 New propellants can be set in PropLib.py, with new matierals added in MaterialLib.py. The selected coolant must be a fluid present in 
-[thermo](https://thermo.readthedocs.io/). A debug mode can be set in config.py to examine the results of the 2D transient simulation to verfiy the chosen mesh and time 
+[CoolProp](http://www.coolprop.org/fluid_properties/PurePseudoPure.html). A debug mode can be set in config.py to examine the results of the 2D transient simulation to verfiy the chosen mesh and time 
 step settings. Run the full simulation by executing 'run.py' in your terminal window. 
 
 ```bash
@@ -125,7 +125,7 @@ or after a set maximum number of iterations is reached. All settings for the 2D 
 all boundaries is calculated and used to determine the total heat flux, as well as the temperature increase of the cooling fluid as it passes throug each section. 
 
 ## Liquid Film Cooling Model
-Optional addition of film cooling to supplement regenerative cooling. This is an implementation of the analytical 0D liquid film cooling model proposed by [Shine et al](https://www.researchgate.net/publication/256718300_A_new_generalised_model_for_liquid_film_cooling_in_rocket_combustion_chambers).The model relies on an energy balance between the convective and radiative heat transfer of the combustion gases and the evaporation of the coolant. The model produces an estimate of the liquid film length and assumes that the temperature rise of the wall under the liquid film is very small. The liquid film cooling length and the resultant reduction in convective heat transfer coefficient are passed to the regenerative cooling method. The film cooling is only assumed to be effective as long as the chamber section is within the liquid film length. 
+Optional addition of film cooling to supplement regenerative cooling. This is an implementation of the analytical 0D liquid film cooling model proposed by [Shine et al](https://www.researchgate.net/publication/256718300_A_new_generalised_model_for_liquid_film_cooling_in_rocket_combustion_chambers).The model relies on an energy balance between the convective and radiative heat transfer of the combustion gases and the evaporation of the coolant. The model produces an estimate of the liquid film length and assumes that the temperature rise of the wall under the liquid film is very small. The liquid film cooling length and the resultant reduction in convective heat transfer coefficient are passed to the regenerative cooling method. Downstream of the liquid film the evaporated coolant forms a gaseous film, which lowers the gas temperature at the wall. Its effectiveness follows the turbulent boundary layer model of Librizzi and Cresci (see Goldstein, Film Cooling, 1971) and decays with the distance from the end of the liquid film. Reactions between the coolant and the combustion gas are not considered. 
 
 ### Plotting Options 
 Results of the full chamber simulation are saved in the target directory as a csv file. A select set of saved data is automatically plotted by calling 'PlottingFunctions.py'.
@@ -192,14 +192,17 @@ terminal output for the simulation. Set 'log_TC' to True to enable the output.
 
 ### Single section takes more than 10 seconds to solve
 
+This only applies to transient simulations with a set 'run_time'. The steady state is solved directly without time stepping: the boundary conditions are 
+part of the equation and the temperature dependent coefficients are updated between the solves until the temperature field stops changing. 
+
 This can either be caused by the solver not reaching a steady state solution or the time step being set too small. Abort the simulation and try again with a different adaptive time step configuration. The function 'adaptive_time_step' in 'SectionThermalSim.py' is responsible for setting the time step based on the previous solution. For better convergence behaviour reduce the value of 'step_up' in the 'adaptive_time_step' function (default is 1.2). 
 
-### Fluid propery returned as 'None' type
+### Coolant is boiling
 
-The library [thermo](https://thermo.readthedocs.io/) does not produce reliable results for Prandtl Number, Cp or viscosity near the supercritical region, 
-especially for mixtures. The error will occur in the function 'heat_transfer_coeff_coolant' in the file 'RegenCooling.py'. If this issue occurs, use a 
-simplified single componant fluid as coolant. You can also write your own coolant class based on the outputs of the thermo Mixture object and replace the
-standard implementation. For this changes need to be made in 'RegenCooling.py' and 'config.py'
+The coolant properties are calculated with [CoolProp](http://www.coolprop.org/) in 'CoolantClass.py'. Two-phase flow is not modelled, so the simulation 
+stops with a ValueError once the coolant reaches its bubble point. Increase the coolant pressure or mass flow, or reduce the heat load. 
+For mixtures CoolProp only provides density, heat capacity and the boiling range. Viscosity and thermal conductivity are mixed from the pure fluid 
+values, with a correction for the high viscosity of ethanol-water mixtures. Other strongly non-ideal mixtures need their own correction in 'CoolantClass.py'
 
 
     

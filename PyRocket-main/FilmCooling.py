@@ -76,6 +76,7 @@ class FilmCooling():
 		# Turbulence correction factor 
 		e_t = 0.1		# using highest value found for small GOx/H2 engines found in literature
 		K_t = 1 + 4 * e_t
+		self.K_t = K_t
 		
 		self.dH_fg_star = self.dH_evap + self.coolant.Cp * (self.T_sat - self.coolant.T)
 	
@@ -102,3 +103,30 @@ class FilmCooling():
 			self.liquid_film_length = -1
 		else:
 			self.liquid_film_length = self.gamma / self.m_v
+
+
+	def gas_film(self, geometry):
+		# Effectiveness of the gaseous film downstream of the liquid film, where the evaporated coolant mixes with the combustion gas.
+		# Turbulent boundary layer model of Librizzi and Cresci (see Goldstein, Film Cooling, 1971): the boundary layer starts with the
+		# mass flow of the coolant vapour and grows by entrainment of combustion gas. The mixing is increased by the same turbulence
+		# factor as the evaporation of the liquid film. Reactions between the coolant and the combustion gas are not considered
+		x = geometry[:,0] - geometry[0,0]						# distance from the injector face
+		r = geometry[:,1]
+		self.eta = np.zeros(len(x))
+
+		if self.m_dot_c == 0.0:
+			return
+
+		# mass flow of the coolant vapour, without the liquid lost by entrainment
+		m_dot_v = self.gamma * np.pi * self.d_ch
+
+		# combustion gas mass flow passing over the film per coolant mass flow, integrated along the wall from the end of the liquid film
+		ds    = np.sqrt(np.diff(x)**2 + np.diff(r)**2)
+		swept = 2 * self.m_dot / m_dot_v * np.append(0, np.cumsum(ds * 0.5 * (1 / r[1:] + 1 / r[:-1])))
+		swept = swept - np.interp(self.liquid_film_length, x, swept)
+
+		gas = swept > 0
+		xi  = self.K_t * swept[gas] * (m_dot_v / (2 * np.pi * r[gas] * self.cea.mu))**(-0.25)
+
+		self.eta[~gas] = 1.0
+		self.eta[gas]  = 1 / (1 + self.cea.Cp / self.coolant.Cp_vapour(self.T_sat) * (0.329 * (4.01 + xi)**0.8 - 1))

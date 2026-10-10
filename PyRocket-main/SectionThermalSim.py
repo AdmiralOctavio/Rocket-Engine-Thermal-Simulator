@@ -8,7 +8,7 @@
 # License:	GNU GENERAL PUBLIC LICENSE V3							#                                          
 #####################################################################
 
-from fipy import CellVariable, Gmsh2D, TransientTerm, DiffusionTerm, Viewer
+from fipy import CellVariable, FaceVariable, Gmsh2D, TransientTerm, DiffusionTerm, ImplicitSourceTerm, Viewer
 import numpy as np
 from matplotlib import pyplot as plt
 
@@ -40,12 +40,16 @@ class HeatEquationSolver():
         self.boltzmann        = 5.67e-8			         # stefan boltzmann constant 
 
 
-    def boundary_conditions(self, mesh, phi, x, y):
+    def heat_trans_coeffs(self, mesh, phi):
         # determine boundary heat transfer coefficients for coolant and chamber side
         self.halpha, self.T_hg = self.halpha_func(np.mean(phi.faceValue[mesh.physicalFaces["ChamberWall"]]), self.idx)                    # uses maxumum wall temperature to determine halpha
         self.halpha_c_bottom   = self.halpha_c_func(np.mean(phi.faceValue[mesh.physicalFaces["CoolantBottomWall"]]), self.idx)            # uses maximum wall temperature at cooling channel bottom wall for viscosity correction in halpha_c function (if applicable)
         self.halpha_c_top      = self.halpha_c_func(np.mean(phi.faceValue[mesh.physicalFaces["CoolantTopWall"]]), self.idx)            # uses maximum wall temperature at cooling channel bottom wall for viscosity correction in halpha_c function (if applicable)
         self.halpha_c_side     = self.halpha_c_func(np.mean(phi.faceValue[mesh.physicalFaces["CoolantSideWall"]]), self.idx)            # uses maximum wall temperature at cooling channel bottom wall for viscosity correction in halpha_c function (if applicable)
+
+
+    def boundary_conditions(self, mesh, phi, x, y):
+        self.heat_trans_coeffs(mesh, phi)
 		
         # parameters are multiplied with mesh face normals
         halpha          = self.halpha * mesh.exteriorFaces                   	# heat transfer coefficient of combustion gas
@@ -87,6 +91,55 @@ class HeatEquationSolver():
         )
 
 
+    def steady_state(self, mesh, phi):
+        # Solves the steady state temperature field directly, without marching in time. The boundary conditions are part of the equation
+        # as heat sources of the cells at the wall and are implicit in the wall temperature, so the solution can not oscillate.
+        # Everything that depends on the temperature (heat transfer coefficients, thermal conductivity, radiation to ambient) is
+        # updated between the solves until the temperature field stops changing
+        chamber = np.array(mesh.physicalFaces["ChamberWall"])
+        outer   = np.array(mesh.physicalFaces["OuterWall"])
+        bottom  = np.array(mesh.physicalFaces["CoolantBottomWall"])
+        top     = np.array(mesh.physicalFaces["CoolantTopWall"])
+        side    = np.array(mesh.physicalFaces["CoolantSideWall"])
+
+        for step in range(self.settings.max_iter):
+            self.heat_trans_coeffs(mesh, phi)
+
+            T     = np.array(phi.faceValue)                        # temperature at the faces
+            k     = self.material.k(T)                             # thermal conductivity of the material (dependent on temperature)
+            h     = np.zeros(len(T))                               # heat transfer coefficient, zero for faces inside the wall
+            T_ref = np.zeros(len(T))                               # temperature of the gas or coolant at the boundary
+            q     = np.zeros(len(T))                               # heat flux which does not depend on the wall temperature
+
+            h[chamber], T_ref[chamber], q[chamber] = self.halpha, self.T_hg, self.q_rad
+            h[bottom],  T_ref[bottom]              = self.halpha_c_bottom, self.T_c
+            h[top],     T_ref[top]                 = self.halpha_c_top, self.T_c
+            h[side],    T_ref[side]                = self.halpha_c_side, self.T_c
+
+            # radiation boundary condition on the outside wall, written as a heat transfer coefficient
+            h[outer]     = self.boltzmann * self.material.eps * (T[outer]**2 + self.T_amb**2) * (T[outer] + self.T_amb)
+            T_ref[outer] = self.T_amb
+
+            # boundary condition k * dT/dn = h * (T_ref - T) + q as source terms of the cells at the boundary
+            implicit = (FaceVariable(mesh=mesh, value=h / k) * mesh.faceNormals).divergence
+            explicit = (FaceVariable(mesh=mesh, value=(h * T_ref + q) / k) * mesh.faceNormals).divergence
+            eq = DiffusionTerm(coeff=1.0) - ImplicitSourceTerm(coeff=implicit) + explicit == 0
+
+            T_old = np.array(phi)
+            eq.solve(var=phi)
+            self.diff = np.max(np.abs(np.array(phi) - T_old))
+
+            if self.settings.print_result:
+                print('iteration: ', step + 1, '	T max: ', round(float(np.max(np.array(phi))), 3), ' [K]')
+
+            # termination critera when the temperature field does not change anymore
+            if self.diff < self.settings.tolerance:
+                break
+
+        else:
+            print('No convergence reached after ', self.settings.max_iter, ' iterations. Error of last iteration is ', self.diff)
+
+
     def adaptive_time_step(self, T_max, min_val=1, low_val=50, max_val=400):
         # adaptive time step based on temperature development of the last two time steps
         delta_T = T_max[-1] - T_max[-2]
@@ -113,12 +166,18 @@ class HeatEquationSolver():
 
         # create mesh nodes and boundary conditrions
         x, y = mesh.faceCenters
+
+        # the steady state is solved directly, time stepping is only used if a run time is set
+        steady = self.settings.run_time == 'steady_state'
+        if steady:
+            self.steady_state(mesh, phi)
+
         self.boundary_conditions(mesh, phi, x, y)
 
         # Equation to solve
         eq = TransientTerm() == DiffusionTerm(coeff=self.material.alpha)
 
-        running = True
+        running = not steady
         T_max = [self.T_amb, self.T_amb]
         time = 0
         step = 0

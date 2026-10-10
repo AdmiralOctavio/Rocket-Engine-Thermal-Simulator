@@ -9,10 +9,10 @@
 #####################################################################
 
 import numpy as np
-import thermo
 import scipy.optimize 
 
 from SectionThermalSim import HeatEquationSolver
+from CoolantClass import Coolant
 
 
 
@@ -76,11 +76,13 @@ class HeatTransfer():
         # in case of film 
         # stanton number correction without film cooling is 1.0
         St_St0 = 1.0
+        eta    = 0.0
         if self.film != False:
             if idx in self.film.cooled_idx:
                 St_St0 = self.film.St_St0
             else:
-                pass
+                # effectiveness of the gaseous film downstream of the liquid film
+                eta = self.film.eta[idx]
         else:
             pass
 
@@ -113,18 +115,30 @@ class HeatTransfer():
 
         error_test = 8.3 / 100 
         stdev_test = 5.6 / 100
-        factor_test = (1 + error_test + 1.96 * stdev_test) * 0.75
+        factor_test = (1 + error_test + 1.96 * stdev_test)
+        # factor_test = 1
 
-        # Are you using additives like PDMS or TOES? Then you should reduce factor_test by the specific amount your additive reduces flux by
+        # Are you using additives like PDMS or TEOS? Then you should reduce factor_test by the specific amount your additive reduces flux by
         # For 1% TEOS, you can expect roughly a 25% flux reduction.
 
-        return halpha * St_St0, T_hg * factor_test
+        T_hg = T_hg * factor_test
+
+        # the gaseous film lowers the gas temperature at the wall towards the temperature of the coolant vapour
+        if eta > 0:
+            T_hg = T_hg - eta * (T_hg - self.film.T_sat)
+
+        return halpha * St_St0, T_hg
         
         
-    def pressure_drop(self, idx):
-        # using Darcy Friction Factor to determine pressure drop. Use surface roughness given in Material Class
+    def friction_factor(self, idx, Re):
+        # Darcy Friction Factor from the Colebrook equation. Use surface roughness given in Material Class
         surface_roughness = self.material.roughness
-        fd = scipy.optimize.fsolve(lambda f: -2 * np.log10(surface_roughness / (3.7 * self.D_h[idx]) + 2.51 / (self.Re * np.sqrt(f))) -1 / np.sqrt(f), 0.001)
+        return scipy.optimize.fsolve(lambda f: -2 * np.log10(surface_roughness / (3.7 * self.D_h[idx]) + 2.51 / (Re * np.sqrt(f))) -1 / np.sqrt(f), 0.001)[0]
+
+
+    def pressure_drop(self, idx):
+        # using Darcy Friction Factor to determine pressure drop
+        fd = self.friction_factor(idx, self.Re)
         dp = fd * self.section_length[idx] / self.D_h[idx] * 0.5 * self.coolant.rho * self.v_coolant**2 
         
         return dp, fd
@@ -147,6 +161,34 @@ class HeatTransfer():
         return q_rad
 
 
+    def nusselt_gnielinski(self, Pr, idx):
+        # Gnielinski correlation extended to laminar and transitional flow, see Gnielinski (2013), 'On heat transfer in tubes'.
+        # The turbulent correlation on its own goes to zero at Re = 1000 and can not be used below Re = 4000
+
+        def turbulent(Re):
+            fd = self.friction_factor(idx, Re)
+            return (fd/8) * (Re - 1000)*Pr / (1 + 12.7*(fd/8)**0.5 * (Pr**(2/3) - 1))
+
+        def laminar(Re):
+            # local Nusselt number of developing laminar flow at constant wall temperature (lower than for constant heat flux).
+            # Distance from the channel inlet is limited to one hydraulic diameter, the correlation is singular at the inlet
+            Gz   = Re * Pr * self.D_h[idx] / max(self.channel_length, self.D_h[idx])
+            Nu_2 = 1.077 * Gz**(1/3)
+            Nu_3 = 0.5 * (2 / (1 + 22*Pr))**(1/6) * Gz**0.5
+            return (3.66**3 + 0.7**3 + (Nu_2 - 0.7)**3 + Nu_3**3)**(1/3)
+
+        if self.Re <= 2300:
+            return laminar(self.Re)
+
+        elif self.Re >= 4000:
+            return turbulent(self.Re)
+
+        else:
+            # linear interpolation between laminar flow at Re = 2300 and turbulent flow at Re = 4000
+            gamma = (self.Re - 2300) / (4000 - 2300)
+            return (1 - gamma) * laminar(2300) + gamma * turbulent(4000)
+
+
     def heat_trans_coeff_coolant(self, T_wall_coolant, idx):
         # coolant flow velocity based on bulk properteis
         self.v_coolant = self.m_dot_coolant / (self.coolant.rho * self.A_c[idx])
@@ -155,20 +197,20 @@ class HeatTransfer():
 		# temperature approximation in the near wall fluid film using a logarithmic mean for log temperature profile
         def get_near_wall_fluid():
             T_avg = (T_wall_coolant - self.coolant.T) / np.log(T_wall_coolant / self.coolant.T)
-            fluid = thermo.Mixture(IDs=self.coolant.IDs, ws=self.coolant.ws, T=T_avg, P=self.coolant.P)
+            fluid = Coolant(IDs=self.coolant.IDs, ws=self.coolant.ws, T=T_avg, P=self.coolant.P)
             return fluid
 
 		# thermodynamic properties of the near wall fluid, Pr implementation of thermo does not work reliably for mixtures near their critical point. Uses gaseouse Pr if liquid Pr returns 'None'
         if self.coolant.phase == 'l':
-            Pr = self.coolant.Prl
-            Cp = self.coolant.Cpl
-            mu = self.coolant.mul
+            Pr = self.coolant.Pr
+            Cp = self.coolant.Cp
+            mu = self.coolant.mu
 
         elif self.coolant.phase == 'g':
             near_wall_coolant = get_near_wall_fluid()
-            Pr = near_wall_coolant.Prg
-            Cp = near_wall_coolant.Cpg
-            mu = near_wall_coolant.mug
+            Pr = near_wall_coolant.Pr
+            Cp = near_wall_coolant.Cp
+            mu = near_wall_coolant.mu
 
         else:
             raise ValueError('Coolant is neither gaseous, nor liquid. Thermo implementation not suitable for supercritical fluids')
@@ -187,9 +229,8 @@ class HeatTransfer():
             Nu = 0.023 * self.Re**0.8 * Pr**0.4
 
         elif self.cool_model == 'gnielinski':
-            # Gnielinski correlation (valid for 3000 < Re < 5e6 and 0.5 < Pr < 2000)
-            _, fd = self.pressure_drop(idx)
-            Nu = (fd/8) * (self.Re - 1000)*Pr / (1 + 12.7*(fd/8)**0.5 * (Pr**(2/3) - 1))
+            # Gnielinski correlation (valid for Re < 5e6 and 0.5 < Pr < 2000), includes laminar and transitional flow
+            Nu = self.nusselt_gnielinski(Pr, idx)
 
         else:
             raise ValueError('Invalid heat transfer method. Select: "dittus-boelter", "dittus-boelter-simple" or "gnielinski"')
@@ -237,12 +278,13 @@ class HeatTransfer():
         dp, _          = self.pressure_drop(idx)
         
         # recalcualte cooling fluid properties, such as density, Pr, Cp etc. 
-        self.coolant   = thermo.Mixture(IDs=self.coolant.IDs, ws=self.coolant.ws, T=(self.coolant.T+dT), P=(self.coolant.P-dp))
+        self.coolant   = Coolant(IDs=self.coolant.IDs, ws=self.coolant.ws, T=(self.coolant.T+dT), P=(self.coolant.P-dp))
         
         
     def run(self):
         # arrays for section length and area in between the 2D sections solved in the thermal sim 
         self.section_length     = np.ndarray(len(self.geometry[:,1]))
+        self.channel_length     = 0                                      # distance travelled by the coolant since the channel inlet [m]
 
         # determine the section length and inner chamber surface area in each section
         for i in range(len(self.geometry[:,1])):
@@ -267,6 +309,8 @@ class HeatTransfer():
                 y_len = (self.geometry[idx+1,1] - self.geometry[idx,1])**2
                 
                 self.section_length[idx] = np.sqrt(x_len + y_len)
+
+            self.channel_length += self.section_length[idx]
 
             # solve section heat transfer and temperature field and update coolant properties
             self.section_heat_flux(idx)

@@ -11,11 +11,11 @@
 # File with unit tests to validate program performance and inputs
 
 import numpy as np
-import thermo 
 from matplotlib import pyplot as plt
 
 # functional imports
 import config
+from CoolantClass import Coolant
 from Output import Settings2D
 from PlottingFunctions import multi_plot
 
@@ -40,7 +40,12 @@ def cooling_fluid_test():
 
     for i in range(len(T_arr)):
         # calculate coolant properties at every temperature 
-        coolant = thermo.Mixture(IDs=config.coolant.IDs, ws=config.coolant.ws, T=T_arr[i], P=config.coolant.P)
+        try:
+            coolant = Coolant(IDs=config.coolant.IDs, ws=config.coolant.ws, T=T_arr[i], P=config.coolant.P)
+        except ValueError:
+            # coolant is boiling at this temperature
+            Cp[i] = k[i] = rho[i] = Pr[i] = np.nan
+            continue
         Cp[i] = coolant.Cp
         rho[i] = coolant.rho
         Pr[i] = coolant.Pr

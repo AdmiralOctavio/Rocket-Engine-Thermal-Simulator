@@ -8,12 +8,12 @@
 # License:	GNU GENERAL PUBLIC LICENSE V3							#                                          
 #####################################################################
 
-import thermo
 import os
 import numpy as np
 
 from IsentropicRelations import Isentropic
 from CEAClass import BipropCEA
+from CoolantClass import Coolant
 from GeomClass import ChamberGeometry, CoolingGeometry
 from Output import Output1D, Settings2D
 from FilmCooling import FilmCooling
@@ -23,32 +23,32 @@ import PropLibrary as proplib
 
 
 # CEA input
-fuel            = proplib.ethanol90               # choose existing fuel or oxidiser from rocketcea or create new fuel or oxidiser blend in PropLibrary
+fuel            = proplib.ethanol80               # choose existing fuel or oxidiser from rocketcea or create new fuel or oxidiser blend in PropLibrary
 ox              = 'N2O'
 hot_gas_method  = 'cinjarev'                         # use either 'cinjarev', 'standard-bartz' or 'modified-bartz'
 
 # Operating point of combustion chamber 
 eta_c_star      = 0.85                                # c* efficiency
 
-MR              = 2
-MR              = 2.1
-m_dot           = 0.307                                # total mass flow [kg/s]
-m_dot_f         = m_dot / (MR + 1)
-m_dot_ox        = m_dot - m_dot_f
+MR              = 5.13
+m_dot           = 0.566                                # total mass flow [kg/s]
+m_dot_f_ideal   = m_dot / (MR + 1)
+m_dot_f         = 0.113
+m_dot_ox        = m_dot - m_dot_f_ideal
 Pc              = 34e5                               # Chamber pressure [Pa]
 
 # Coolant input
-cooling_fluid   = ['C2H5OH', 'H2O']                            # needs to be list of str
-fluid_mass_frac = [1, 0]    			                 # mass fractions of the cooling fluid (needs to add up to 1)
+cooling_fluid   = ['Ethanol', 'Water']                         # needs to be list of str, use CoolProp fluid names
+fluid_mass_frac = [0.8, 0.2]    			                 # mass fractions of the cooling fluid (needs to add up to 1)
 m_dot_coolant   = m_dot_f                 		 	 # mass flow through the cooling channels
-inlet_temp      = 288.0                     		 # inlet temperature [K]
-inlet_pressure  = 50e5                               # Cooling channel inlet pressure [Pa]
+inlet_temp      = 322                     		 # inlet temperature [K]
+inlet_pressure  = 45e5                               # Cooling channel inlet pressure [Pa]
 
 cooling_method  = 'gnielinski'                       # use either 'gnielinski', 'dittus-boelter' or 'dittus-boelter-simple', pay attention to suitable Re number range
 ambient_temp    = 288.15							 # ambient temperature for radiation boundary condition [K] (must be type float)!!
 
 # Film cooling settings for coolant originating at the injector face
-m_dot_film = 0.05 * m_dot_coolant                      # set mass flow to 0.0 to deactivate film cooing
+m_dot_film = 0.35 * m_dot_coolant                      # set mass flow to 0.0 to deactivate film cooing
 injection_velocity = 10								  # [m/s]
 injector_diameter  = 0.4e-3							  # [m]
 
@@ -64,22 +64,22 @@ phi_conv  = 30                                       # convergence angle [deg]
 phi_div   = 24                                       # divergence angle [deg]
 phi_e     = 15                                       # exit angle [deg]
 step_size = 0.0025                                     # step size along the chamber contour [m]
-material  = matlib.AlSi10Mg                             # use entry from MaterialLibrary. Make sure temperature dependent properties are specified
+material  = matlib.IN718                             # use entry from MaterialLibrary. Make sure temperature dependent properties are specified
 
 # cooling channel geometry; h_c, psi, t_w_i can be functions of x 
 n         = 20                                       # number of cooling channels [int]
 h_c       = 1e-3                                     # radial height of cooling channels [m] CAN BE FLOAT OR FUNCTION
 # EXAMPLE of function input for psi: psi = lambda x: 1/3 * (1 - 0.0001 * x) 
 psi       = 0.6                                      # fill factor of the cooling channels; fraction of the circumferecne covered by the cooling channels (0 - 1) CAN BE FLOAT OR FUNCTION
-t_w_i     = 1e-3                                   # inner chamber wall thickness [m] CAN BE FLOAT OR FUNCTION
-t_w_o     = 1.2e-3                                     # outer chamber wall thickness [m]
+t_w_i     = 0.5e-3                                   # inner chamber wall thickness [m] CAN BE FLOAT OR FUNCTION
+t_w_o     = 1.3e-3                                     # outer chamber wall thickness [m]
 start_idx = -1										 # starting index, use 0 for injector side and -1 for nozzle
 
 # 2D Section Simulation settings
-cell_size    = 0.35 * t_w_i                          # cell size in 2D section solver, will heavily impact performance
+cell_size    = 0.15 * t_w_i                          # cell size in 2D section solver, will heavily impact performance
 time_step    = (cell_size)**2 / (material.alpha)     # time step in 2D section solver (cell_size)**2 / (material.alpha)
 adaptive_up  = 1.4                                   # UP factor for adaptive time step. Increase for faster convergence but less stability
-tolerance    = 1e-2                                  # maximum temperature difference between time steps
+tolerance    = 5e-2                                  # maximum temperature difference between time steps
 max_iter     = 300									 # maximum number of iterations before termination
 save_fig     = True                                  # save figures to folder in Output Class
 print_result = True                                  # print intermittant maximum temperatures, useful for DEBUGGING
@@ -132,10 +132,11 @@ cea.metric_cea_output('throat', MR, chamber.expansion_ratio)
 gas = Isentropic(Pc, cea.Tc, cea.gamma, cea.Pr, geometry[:,0], geometry[:,1])
 gas.calculate()
 
-# coolant Properties from thermo library
-coolant = thermo.Mixture(cooling_fluid, ws=fluid_mass_frac, P=inlet_pressure, T=inlet_temp)     
+# coolant Properties from CoolProp library
+coolant = Coolant(cooling_fluid, ws=fluid_mass_frac, P=inlet_pressure, T=inlet_temp)     
 
 # film cooling model
 film = FilmCooling(cea, coolant, injection_velocity, injector_diameter, D_c, m_dot - m_dot_film, m_dot_film)
 film.film_length()
-film.cooled_idx = np.where(geometry[:,0] <= film.liquid_film_length)[0]
+film.cooled_idx = np.where(geometry[:,0] - geometry[0,0] <= film.liquid_film_length)[0]       # film length is measured from the injector face, the first point of the contour
+film.gas_film(geometry)                                                                              # gaseous film downstream of the liquid film

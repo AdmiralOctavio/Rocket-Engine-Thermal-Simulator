@@ -65,7 +65,7 @@ E = 1							# youngs modulus [Pa]
 a = 1							# thermal expasion coefficinent [1/K]
 sig_u = 1                  		# ultimate strength [Pa]
 eps = 0.8						# thermal emissivity
-roughness = 1e-5				# effective roughness height [m] from Materialize
+roughness = 5e-5				# effective roughness height [m] from Materialize
 alpha = k / rho / Cp			# thermal diffusivity [m^2/s]
 IN718 = Material('IN718', alpha, k, rho, Cp, v, E, a, eps, sig_u, roughness)
 
@@ -87,6 +87,20 @@ CuCr1Zr = Material('CuCr1Zr', alpha, k, rho, Cp, v, E, a, eps, sig_u, roughness)
 
 # set variable material properties for CuCr1Zr from 'Thermal Fatigue testing of CuCrZr allow for high temperature tooling applications' by Y. Birol
 CuCr1Zr.thermal_conductivity(np.array([290, 292, 300, 302, 305, 310, 315, 320, 330]), np.array([273, 373, 473, 573, 673, 773, 873, 973, 1073]))
+
+# GRCop-42 (L-PBF + HIP)
+k = 320							# thermal conductivity [W/m/K] at 400 C, Chen et al. 2023 fit (multi-vendor L-PBF)
+Cp = 424						# specific heat [J/kg/K] at 400 C, Chen et al. 2023 (NIST mixture estimate, not measured)
+rho = 8790						# density [kg/m^3] at RT, Velo3D datasheet
+v = 0.34						# poisson ratio, assumed same as Cu, no GRCop-42 data found
+E = 110e9						# youngs modulus [Pa] at 400 C, ESTIMATE: RT ~121-130 GPa (DED study), scaled like Cu
+a = 17.0e-6						# thermal expansion coefficient [1/K], secant 20-400 C, Chen et al. 2023
+sig_u = 200e6					# ultimate strength [Pa] at 400 C, ESTIMATE, see notes
+eps = 0.8						# thermal emissivity, same assumption as CuCr1Zr
+roughness = 1.0e-5				# roughness [m], Ra 8-10 um as-printed, 3D Systems LT60
+alpha = k / rho / Cp			# thermal diffusivity [m^2/s]
+GRCop42 = Material('GRCop-42', alpha, k, rho, Cp, v, E, a, eps, sig_u, roughness)
+GRCop42.thermal_conductivity(np.array([329, 328, 326, 324, 320, 314, 307, 297, 286]), np.array([273, 373, 473, 573, 673, 773, 873, 973, 1073]))
 
 # SS 316L
 k = 21							# Lowk asked chatgpt for this
@@ -142,7 +156,7 @@ E = 1							# youngs modulus [Pa]
 a = 1							# thermal expasion coefficinent [1/K]
 sig_u = 1                  		# ultimate strength [Pa]
 eps = 0.8						# thermal emissivity
-roughness = 1e-5				# effective roughness height [m], estimate
+roughness = 5e-5				# effective roughness height [m], estimate
 alpha = k / rho / Cp			# thermal diffusivity [m^2/s]
 AlSi10Mg = Material('AlSi10Mg', alpha, k, rho, Cp, v, E, a, eps, sig_u, roughness)
 # variable material properties from https://backend.orbit.dtu.dk/ws/portalfiles/portal/222710402/Thermal_properties_JMEP_postprint.pdf
