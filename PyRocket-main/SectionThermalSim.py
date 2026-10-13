@@ -25,13 +25,14 @@ class HeatEquationSolver():
     Information from the previous time step is used for updating the boundary conditions and thermal conductivity of the material.
     The thermal diffusivity is assumed constant with temperature.
     """
-    def __init__(self, idx, gas, material, cooling_geometry, halpha_func, halpha_c_func, q_rad, coolant_temperature, ambient_temperature, path, settings):
+    def __init__(self, idx, gas, material, cooling_geometry, halpha_func, halpha_c_func, q_rad, coolant_temperature, ambient_temperature, path, settings, boiling_func=None):
         self.idx              = idx                      # location along the chamber contour
         self.gas              = gas                      # isentropic gas object
         self.material         = material                 # material object
         self.cooling_geometry = cooling_geometry         # cooling channel geometry object                    
         self.halpha_func      = halpha_func              # hot gas side heat transfer coefficient function pointer
         self.halpha_c_func    = halpha_c_func            # coolant side heat transfer coefficient function pointer
+        self.boiling_func     = boiling_func             # coolant side heat flux with nucleate boiling function pointer, None for forced convection only
         self.q_rad            = q_rad                    # radiative heat flux [W/m^2]
         self.T_c              = coolant_temperature      # coolant temperature [K]
         self.T_amb            = ambient_temperature      # ambient temperature around the thruster [K]
@@ -48,16 +49,35 @@ class HeatEquationSolver():
         self.halpha_c_side     = self.halpha_c_func(np.mean(phi.faceValue[mesh.physicalFaces["CoolantSideWall"]]), self.idx)            # uses maximum wall temperature at cooling channel bottom wall for viscosity correction in halpha_c function (if applicable)
 
 
+    def coolant_walls(self, mesh, T):
+        # Heat transfer coefficient and coolant temperature of the boundary condition q = h * (T - T_c) for the faces at the cooling channel walls,
+        # zero for all other faces. T is the temperature at the faces. With nucleate boiling the heat flux is not linear in the wall temperature:
+        # the boiling curve is replaced by its tangent at T, so that updating the boundary condition between two solves is a Newton iteration
+        h   = np.zeros(len(T))
+        T_c = np.zeros(len(T))
+
+        for wall, halpha_c in (("CoolantBottomWall", self.halpha_c_bottom), ("CoolantTopWall", self.halpha_c_top), ("CoolantSideWall", self.halpha_c_side)):
+            h[np.array(mesh.physicalFaces[wall])]   = halpha_c
+            T_c[np.array(mesh.physicalFaces[wall])] = self.T_c
+
+        if self.boiling_func is not None:
+            walls      = h > 0
+            q, dq_dT   = self.boiling_func(T[walls], h[walls])
+            h[walls]   = dq_dT
+            T_c[walls] = T[walls] - q / dq_dT
+
+        return h, T_c
+
+
     def boundary_conditions(self, mesh, phi, x, y):
         self.heat_trans_coeffs(mesh, phi)
+        halpha_c, T_c = self.coolant_walls(mesh, np.array(phi.faceValue))
 		
         # parameters are multiplied with mesh face normals
         halpha          = self.halpha * mesh.exteriorFaces                   	# heat transfer coefficient of combustion gas
-        halpha_c_bottom = self.halpha_c_bottom * mesh.exteriorFaces                   # heat transfer coefficient of the coolant  
-        halpha_c_top    = self.halpha_c_top * mesh.exteriorFaces
-        halpha_c_side   = self.halpha_c_side * mesh.exteriorFaces
+        halpha_c        = FaceVariable(mesh=mesh, value=halpha_c)              # heat transfer coefficient of the coolant, tangent to the boiling curve with nucleate boiling
         q_rad           = self.q_rad * mesh.exteriorFaces                      # radiative heat flux
-        T_c             = self.T_c * mesh.exteriorFaces                        # coolant temperature
+        T_c             = FaceVariable(mesh=mesh, value=T_c)                   # coolant temperature
         T_hg            = self.T_hg * mesh.exteriorFaces                       # gas temperature near the inner chamber wall
         T_amb           = self.T_amb * mesh.exteriorFaces                      # ambient temperature around the engine
         k               = self.material.k(phi.faceValue)                       # thermal conductivity of the material (dependent on temperature)
@@ -66,15 +86,15 @@ class HeatEquationSolver():
         # q = -k delta T
 
         phi.faceGrad.constrain(
-            [(-1 / k * halpha_c_top * (phi.faceValue - T_c)) * mesh.faceNormals],
+            [(-1 / k * halpha_c * (phi.faceValue - T_c)) * mesh.faceNormals],
             mesh.physicalFaces["CoolantTopWall"],
         )
         phi.faceGrad.constrain(
-            [(-1 / k * halpha_c_side * (phi.faceValue - T_c)) * mesh.faceNormals],
+            [(-1 / k * halpha_c * (phi.faceValue - T_c)) * mesh.faceNormals],
             mesh.physicalFaces["CoolantSideWall"],
         )
         phi.faceGrad.constrain(
-            [(-1 / k * halpha_c_bottom * (phi.faceValue - T_c)) * mesh.faceNormals],
+            [(-1 / k * halpha_c * (phi.faceValue - T_c)) * mesh.faceNormals],
             mesh.physicalFaces["CoolantBottomWall"],
         )
 
@@ -98,23 +118,16 @@ class HeatEquationSolver():
         # updated between the solves until the temperature field stops changing
         chamber = np.array(mesh.physicalFaces["ChamberWall"])
         outer   = np.array(mesh.physicalFaces["OuterWall"])
-        bottom  = np.array(mesh.physicalFaces["CoolantBottomWall"])
-        top     = np.array(mesh.physicalFaces["CoolantTopWall"])
-        side    = np.array(mesh.physicalFaces["CoolantSideWall"])
 
         for step in range(self.settings.max_iter):
             self.heat_trans_coeffs(mesh, phi)
 
             T     = np.array(phi.faceValue)                        # temperature at the faces
             k     = self.material.k(T)                             # thermal conductivity of the material (dependent on temperature)
-            h     = np.zeros(len(T))                               # heat transfer coefficient, zero for faces inside the wall
-            T_ref = np.zeros(len(T))                               # temperature of the gas or coolant at the boundary
+            h, T_ref = self.coolant_walls(mesh, T)                 # heat transfer coefficient and temperature of the gas or coolant at the boundary, zero for faces inside the wall
             q     = np.zeros(len(T))                               # heat flux which does not depend on the wall temperature
 
             h[chamber], T_ref[chamber], q[chamber] = self.halpha, self.T_hg, self.q_rad
-            h[bottom],  T_ref[bottom]              = self.halpha_c_bottom, self.T_c
-            h[top],     T_ref[top]                 = self.halpha_c_top, self.T_c
-            h[side],    T_ref[side]                = self.halpha_c_side, self.T_c
 
             # radiation boundary condition on the outside wall, written as a heat transfer coefficient
             h[outer]     = self.boltzmann * self.material.eps * (T[outer]**2 + self.T_amb**2) * (T[outer] + self.T_amb)
@@ -138,6 +151,35 @@ class HeatEquationSolver():
 
         else:
             print('No convergence reached after ', self.settings.max_iter, ' iterations. Error of last iteration is ', self.diff)
+
+
+    def wall_temperatures(self, mesh, phi):
+        # Temperatures for the wall stress analysis: temperature difference through the inner wall at the centre line of the cooling channel
+        # and the mean temperatures of the inner wall, the ribs between the channels and the outer wall, with their cross section areas
+        x_f = np.array(mesh.faceCenters[0])
+        T_f = np.array(phi.faceValue)
+
+        def centre_line(wall):
+            # the centre line of the cooling channel is the symmetry line of the mesh at x = 0
+            faces = np.where(np.array(mesh.physicalFaces[wall]))[0]
+            return float(T_f[faces[np.argmin(np.abs(x_f[faces]))]])
+
+        self.T_wall_hot  = centre_line("ChamberWall")
+        self.T_wall_cold = centre_line("CoolantBottomWall")
+
+        x, y = np.array(mesh.cellCenters)
+        r    = np.sqrt(x**2 + y**2)
+        A    = np.array(mesh.cellVolumes)
+        T    = np.array(phi)
+
+        r_i   = self.cooling_geometry.geom[self.idx, 1] + self.cooling_geometry.t_w_i[self.idx]      # inner radius of the cooling channels
+        r_o   = r_i + self.cooling_geometry.h_c[self.idx]                                            # outer radius of the cooling channels
+        inner = r <= r_i
+        outer = r >= r_o
+        rib   = ~inner & ~outer
+
+        self.A_inner, self.A_rib, self.A_outer = (float(np.sum(A[part])) for part in (inner, rib, outer))
+        self.T_inner, self.T_rib, self.T_outer = (float(np.sum(T[part] * A[part]) / np.sum(A[part])) for part in (inner, rib, outer))
 
 
     def adaptive_time_step(self, T_max, min_val=1, low_val=50, max_val=400):
@@ -222,6 +264,7 @@ class HeatEquationSolver():
         #self.phi = phi
         self.outer_wall_temp = max(phi.faceValue[mesh.physicalFaces["OuterWall"]])
         self.inner_wall_temp = max(phi.faceValue[mesh.physicalFaces["ChamberWall"]])
+        self.coolant_wall_temp = max(max(phi.faceValue[mesh.physicalFaces[wall]]) for wall in ("CoolantBottomWall", "CoolantTopWall", "CoolantSideWall"))
 		
 		# boundary fluxes along normal vectors
         dT_dn_c_top    = np.sqrt(phi.faceGrad[0][mesh.physicalFaces["CoolantTopWall"]]**2 + phi.faceGrad[1][mesh.physicalFaces["CoolantTopWall"]]**2)
@@ -236,11 +279,16 @@ class HeatEquationSolver():
         self.q_c_side    = self.material.k(phi.faceValue[mesh.physicalFaces["CoolantSideWall"]]) * dT_dn_c_side
         self.q_chamber   = self.material.k(phi.faceValue[mesh.physicalFaces["ChamberWall"]]) * dT_dn_chamber
         self.q_outer	 = self.material.k(phi.faceValue[mesh.physicalFaces["OuterWall"]]) * dT_dn_outer
+
+        # highest local heat flux into the coolant, which is the one to compare with the critical heat flux
+        self.q_c_max = float(max(max(self.q_c_top), max(self.q_c_bottom), max(self.q_c_side)))
 		
 		# total coolant side heat transferred [W/m]
         self.Q_c = (2 * np.sum([self.q_c_top[i] * self.settings.cell_size for i in range(len(self.q_c_top))])
 		          + 2 * np.sum([self.q_c_bottom[i] * self.settings.cell_size for i in range(len(self.q_c_bottom))])
 				  + 2 * np.sum([self.q_c_side[i] * self.settings.cell_size for i in range(len(self.q_c_side))]))
+
+        self.wall_temperatures(mesh, phi)
 
         if self.settings.save_fig:
             # save section temperature profile

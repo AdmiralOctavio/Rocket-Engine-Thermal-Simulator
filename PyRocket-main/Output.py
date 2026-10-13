@@ -51,6 +51,16 @@ class Output1D:
         self.Re          = np.ndarray(len(self.geometry[:, 1]))
         self.v_coolant   = np.ndarray(len(self.geometry[:, 1]))
         self.T_hg        = np.ndarray(len(self.geometry[:, 1]))
+        self.T_wall_c    = np.ndarray(len(self.geometry[:, 1]))
+        self.T_sat       = np.ndarray(len(self.geometry[:, 1]))
+        self.q_c_max     = np.ndarray(len(self.geometry[:, 1]))
+        self.q_chf       = np.ndarray(len(self.geometry[:, 1]))
+
+        # wall temperatures and stresses from StressAnalysis.py, stresses stay nan for materials without a yield strength
+        self.stress_keys = ['dT_wall', 'T_inner', 'T_rib', 'T_outer', 'sig_p_bend', 'sig_p_membrane', 'sig_grad', 'sig_mis_hoop', 'sig_mis_axial', 'sig_secondary', 'sig_y', 'X', 'Y', 'strain_range']
+        for key in self.stress_keys:
+            setattr(self, key, np.full(len(self.geometry[:, 1]), np.nan))
+        self.regime      = [''] * len(self.geometry[:, 1])
         self.folder_path = folder_path
 		
     def output_msg(self):
@@ -77,6 +87,25 @@ class Output1D:
                 " Re_coolant",
                 " v_coolant [m/s]",
                 " T_hg (cinjarev) [K]",
+                " T_wall_coolant [K]",
+                " T_sat_coolant [K]",
+                " q_coolant_max [W/m^2]",
+                " q_CHF [W/m^2]",
+                " dT_inner_wall [K]",
+                " T_inner_wall_mean [K]",
+                " T_rib_mean [K]",
+                " T_outer_wall_mean [K]",
+                " sigma_pressure_bending [Pa]",
+                " sigma_pressure_membrane [Pa]",
+                " sigma_gradient [Pa]",
+                " sigma_mismatch_hoop [Pa]",
+                " sigma_mismatch_axial [Pa]",
+                " sigma_secondary [Pa]",
+                " sigma_yield [Pa]",
+                " Bree X",
+                " Bree Y",
+                " strain range",
+                " Bree regime",
             ]
         )
 
@@ -95,7 +124,13 @@ class Output1D:
                     self.Re[i],
                     self.v_coolant[i],
                     self.T_hg[i],
+                    self.T_wall_c[i],
+                    self.T_sat[i],
+                    self.q_c_max[i],
+                    self.q_chf[i],
                 ]
+                + [getattr(self, key)[i] for key in self.stress_keys]
+                + [self.regime[i]]
             )
 
         f.close()

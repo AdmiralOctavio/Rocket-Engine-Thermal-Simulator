@@ -12,12 +12,13 @@ import numpy as np
 import scipy.optimize 
 
 from SectionThermalSim import HeatEquationSolver
-from CoolantClass import Coolant
+from CoolantClass import Coolant, saturation_properties
+from StressAnalysis import WallStress
 
 
 
 class HeatTransfer():
-    def __init__(self, cea, gas, geometry, material, coolant, cooling_geometry, m_dot, m_dot_coolant, T_amb, output, settings2D, model='standard-bartz', cool_model='gnielinski', eta_c_star=0.92, film=False):
+    def __init__(self, cea, gas, geometry, material, coolant, cooling_geometry, m_dot, m_dot_coolant, T_amb, output, settings2D, model='standard-bartz', cool_model='gnielinski', eta_c_star=0.92, film=False, boiling=False, chf_model='meyer'):
         """[summary]
         Class to calculate heat tranfer coefficients and radiative heat transfer at arbitrary locations along the chamber contour.
 		These functions are passed to the 2D thermal simulation, after which the program advances to the next chamber section. Several options are 
@@ -43,12 +44,16 @@ class HeatTransfer():
         self.D_h = cooling_geometry.D_h				    # cooling channel hydraulic diameter [m]
 
         self.film = film
+        self.boiling = boiling                          # nucleate boiling at the cooling channel walls
+        self.chf_model = chf_model                      # critical heat flux correlation
 
         self.T_amb = T_amb								# ambient temperature [K], must be float!!!
         self.boltzmann = 5.67e-8						# stefan boltzmann constant
 
         self.out = output								# output class
         self.settings2D = settings2D					# settings for 2D thermal sim
+
+        self.stress = WallStress(material, cooling_geometry, T_amb)    # wall stress analysis, wall is free of thermal stress at ambient temperature
 
 
 
@@ -78,13 +83,11 @@ class HeatTransfer():
         St_St0 = 1.0
         eta    = 0.0
         if self.film != False:
-            if idx in self.film.cooled_idx:
-                St_St0 = self.film.St_St0
-            else:
-                # effectiveness of the gaseous film downstream of the liquid film
-                eta = self.film.eta[idx]
-        else:
-            pass
+            # Reduced heat transfer under the liquid films and effectiveness of the gaseous films downstream of them. The convective heat of the
+            # combustion gas evaporates a liquid film and does not reach the wall under it: the wall faces coolant at saturation temperature,
+            # as it does where the gaseous film starts (effectiveness of 1)
+            St_St0 = self.film.St_St0[idx]
+            eta    = 1.0 if self.film.liquid[idx] else self.film.eta[idx]
 
         # Nusselt number correlation for the combustion gases
         if self.model == 'standard-bartz':
@@ -115,8 +118,8 @@ class HeatTransfer():
 
         error_test = 8.3 / 100 
         stdev_test = 5.6 / 100
-        factor_test = (1 + error_test + 1.96 * stdev_test)
-        # factor_test = 1
+        # factor_test = (1 + error_test + 1.96 * stdev_test)
+        factor_test = 1
 
         # Are you using additives like PDMS or TEOS? Then you should reduce factor_test by the specific amount your additive reduces flux by
         # For 1% TEOS, you can expect roughly a 25% flux reduction.
@@ -248,6 +251,80 @@ class HeatTransfer():
             return halpha[0]
 
 
+    def heat_flux_boiling(self, T_wall, halpha_c):
+        # Heat flux into the coolant at the faces of the cooling channel walls with the temperatures T_wall, halpha_c is the heat transfer coefficient
+        # of forced convection at these faces. Walls above the saturation temperature are cooled by subcooled nucleate boiling, after Liu and
+        # Winterton (1991): forced convection and nucleate pool boiling (Cooper) are added as the root of the sum of squares, with the boiling
+        # suppressed by the flow. Returns the heat flux and its derivative with respect to the wall temperature
+        sat    = self.sat
+        P_r    = self.coolant.P / sat.P_crit
+        cooper = 55 * P_r**0.12 * (-np.log10(P_r))**(-0.55) * self.coolant.MW**(-0.5)
+        S      = 1 / (1 + 0.055 * self.Re**0.16)
+
+        def heat_flux(T_wall):
+            q    = halpha_c * (T_wall - self.coolant.T)
+            boil = T_wall > sat.T_bubble
+            q_fc = q[boil]
+            q_b  = np.maximum(q_fc, 1.0)
+
+            # the pool boiling heat transfer coefficient depends on the heat flux itself, this iteration always converges
+            for i in range(40):
+                h_pool  = cooper * q_b**0.67
+                # mixtures boil worse than pure fluids, since the volatile component has to diffuse to the wall: correction of Thome and Shakir (1987)
+                # with the boiling range of the mixture and a mass transfer coefficient of 0.0003 m/s. No effect for pure fluids
+                h_pool /= 1 + h_pool / q_b * sat.dT_bp * (1 - np.exp(-q_b / (sat.rho_l * sat.Hvap * 0.0003)))
+                q_b     = np.sqrt(q_fc**2 + (S * h_pool * (T_wall[boil] - sat.T_bubble))**2)
+
+            q[boil] = q_b
+            return q
+
+        dT = 0.01
+        q  = heat_flux(T_wall)
+
+        return q, (heat_flux(T_wall + dT) - q) / dT
+
+
+    def critical_heat_flux(self, halpha_c, idx):
+        # Critical heat flux (CHF) of the subcooled coolant. Above it a vapour film separates the coolant from the wall and nucleate boiling breaks down
+        sat    = self.sat
+        dT_sub = max(sat.T_bubble - self.coolant.T, 0.0)
+        ethanol = self.coolant.names[np.argmax(self.coolant.zs * self.coolant.Ms)] == 'Ethanol'      # ethanol is the main component of the coolant by mass
+
+        if self.chf_model == 'meyer':
+            # Correlation of Meyer, Linne and Rousar (NASA TM-1998-206612) for ethanol with the product of velocity and subcooling, measured in heated
+            # tubes of 2.4 mm diameter at 10 to 48 bar, 3 to 23 m/s and 18 to 200 K subcooling (within 20 %). In units of ft/s, F, psia and BTU/in^2/s.
+            # The coolant only enters with its saturation temperature: CHF of a mixture with water is expected to be higher than predicted
+            if not ethanol:
+                raise ValueError('The "meyer" critical heat flux correlation is only valid for coolants based on ethanol, select "gambill" or "hall-mudawar" instead')
+            V_dT_sub = (self.v_coolant / 0.3048) * (dT_sub * 1.8)
+            F_P      = max(1.17 - 8.56e-4 * self.coolant.P / 6894.76, 0.0)
+            return (0.1003 + 0.05264 * np.sqrt(V_dT_sub)) * F_P * 1.6353e6
+
+        elif self.chf_model == 'gambill':
+            # Superposition of Gambill (1963) for any coolant: CHF of pool boiling (Kutateladze, with the increase by subcooling) plus the heat flux
+            # of forced convection to the subcooled coolant, here with the wall at saturation temperature. Uses the properties of the coolant
+            # mixture at saturation. On the conservative side: 44 % below the ethanol measurements of Meyer et al. on average
+            pool  = 0.15 * sat.Hvap * sat.rho_g * (sat.sigma * 9.81 * (sat.rho_l - sat.rho_g) / sat.rho_g**2)**0.25
+            pool *= 1 + (sat.rho_l / sat.rho_g)**0.923 * sat.dH_sub / (25 * sat.Hvap)
+            return pool + halpha_c * dT_sub
+
+        elif self.chf_model == 'hall-mudawar':
+            # Correlation of Hall and Mudawar (2000) for subcooled water in tubes of 0.25 to 15 mm diameter: boiling number as a function of the Weber
+            # number, the density ratio and the subcooling. Uses the properties of the coolant mixture at saturation and the hydraulic diameter of the channel.
+            # It is too high for ethanol: on the tests of Meyer et al. by a factor of 0.8 * dT_sub^0.25 / v^0.2 [K, m/s], which is 1.6 on average.
+            # For coolants based on ethanol the result is divided by this factor (subcooling of at least 18 K as in the tests), which reproduces
+            # the tests with a scatter of 12 %. The correlation is not too high for water, so this is probably on the safe side for mixtures with water
+            G     = self.coolant.rho * self.v_coolant
+            We    = G**2 * self.D_h[idx] / (sat.rho_l * sat.sigma)
+            q_chf = 0.0722 * We**(-0.312) * (sat.rho_l / sat.rho_g)**(-0.644) * (1 + 0.9 * (sat.rho_l / sat.rho_g)**0.724 * sat.dH_sub / sat.Hvap) * G * sat.Hvap
+            if ethanol:
+                q_chf /= 0.8 * max(dT_sub, 18.0)**0.25 / self.v_coolant**0.2
+            return q_chf
+
+        else:
+            raise ValueError('Invalid critical heat flux method. Select: "meyer", "gambill" or "hall-mudawar"')
+
+
     def section_heat_flux(self, idx):
         self.q_rad = self.radiation(idx)
         
@@ -255,8 +332,30 @@ class HeatTransfer():
                 
         print('SOLVING Section Number	', len(self.geometry[:,1]) - idx, ' / ', len(self.geometry[:,1]))
         
-        solver = HeatEquationSolver(idx, self.gas, self.material, self.cooling_geometry, self.heat_trans_coeff_gas, self.heat_trans_coeff_coolant, self.q_rad, self.coolant.T, self.T_amb, self.out.folder_path, self.settings2D)
+        # the coolant can only boil at the walls if it is a liquid below its critical pressure
+        self.sat = self.coolant.saturation() if self.boiling and self.coolant.phase == 'l' else None
+        boiling  = self.heat_flux_boiling if self.sat is not None else None
+
+        solver = HeatEquationSolver(idx, self.gas, self.material, self.cooling_geometry, self.heat_trans_coeff_gas, self.heat_trans_coeff_coolant, self.q_rad, self.coolant.T, self.T_amb, self.out.folder_path, self.settings2D, boiling)
         solver.run_sim()
+
+        # highest local heat flux at the cooling channel walls with nucleate boiling, compared to the critical heat flux
+        self.q_c_max = solver.q_c_max
+        self.T_sat   = np.nan
+        self.q_chf   = np.nan
+        if self.sat is not None:
+            self.T_sat = self.sat.T_bubble
+            self.q_chf = self.critical_heat_flux(solver.halpha_c_bottom, idx)
+
+            if solver.coolant_wall_temp > self.T_sat and self.q_c_max > self.q_chf:
+                # Nucleate boiling can not carry this heat flux. The heat transfer above CHF is not modelled: the section is solved again with
+                # forced convection only, so that boiling is not counted on where it breaks down. Film boiling can give much hotter walls
+                print('Critical heat flux exceeded: ', round(self.q_c_max / 1e6, 2), ' > ', round(self.q_chf / 1e6, 2), ' [MW/m^2], section is solved again without nucleate boiling')
+                self.chf_exceeded.append(idx)
+                solver.boiling_func = None
+                solver.run_sim()
+
+        self.T_wall_c  = solver.coolant_wall_temp       # highest wall temperature of the cooling channel
 
         self.T_wall_i  = solver.inner_wall_temp	    # inner wall temperature taken as maximum temperature of the 2D profile
         self.halpha    = solver.halpha			    # heat transfer coefficients taken as the of the boundary conditions of the 2D solver at the last timestep
@@ -266,8 +365,11 @@ class HeatTransfer():
         # total heat flux into the inner chamber wall
         self.q 		   = np.mean(solver.q_chamber)
 
-        # radiation leaving to ambient 
+        # radiation leaving to ambient
         self.q_rad_out = np.mean(solver.q_outer)
+
+        # wall temperatures and stresses with the coolant pressure at the inlet of the section
+        self.wall_stress = self.stress.section(idx, solver, self.coolant.P, self.gas.p_s[idx])
 		
         # ensure that FiPy output object is actually a float, multiplied by the number of channels for total area
         Q = float(solver.Q_c) * self.section_length[idx] * self.cooling_geometry.n_channels
@@ -276,6 +378,13 @@ class HeatTransfer():
         # update cooling fluid and pressure. Expected temperature rise and pressure drop 
         dT             = Q / (self.m_dot_coolant * self.coolant.Cp) 
         dp, _          = self.pressure_drop(idx)
+
+        # Evaporation of the coolant itself is not modelled. Where the coolant reaches its saturation temperature it is kept just below it as a liquid
+        if self.sat is not None:
+            T_sat = saturation_properties(self.coolant.names, tuple(self.coolant.zs), self.coolant.P - dp)[0]
+            if self.coolant.T + dT > T_sat - 0.1:
+                dT = T_sat - 0.1 - self.coolant.T
+                self.bulk_boiling.append(idx)
         
         # recalcualte cooling fluid properties, such as density, Pr, Cp etc. 
         self.coolant   = Coolant(IDs=self.coolant.IDs, ws=self.coolant.ws, T=(self.coolant.T+dT), P=(self.coolant.P-dp))
@@ -285,6 +394,8 @@ class HeatTransfer():
         # arrays for section length and area in between the 2D sections solved in the thermal sim 
         self.section_length     = np.ndarray(len(self.geometry[:,1]))
         self.channel_length     = 0                                      # distance travelled by the coolant since the channel inlet [m]
+        self.chf_exceeded       = []                                     # sections in which the critical heat flux is exceeded
+        self.bulk_boiling       = []                                     # sections in which the coolant itself reaches its saturation temperature
 
         # determine the section length and inner chamber surface area in each section
         for i in range(len(self.geometry[:,1])):
@@ -315,6 +426,10 @@ class HeatTransfer():
             # solve section heat transfer and temperature field and update coolant properties
             self.section_heat_flux(idx)
 
+            # film cooling ports in the chamber wall take their coolant from the cooling channels, less coolant is left for the rest of the channel
+            if self.film != False:
+                self.m_dot_coolant -= self.film.m_dot_ports[idx]
+
             # write to output class
             self.out.halpha[idx]    = self.halpha
             self.out.halpha_c[idx]  = self.halpha_c
@@ -326,6 +441,29 @@ class HeatTransfer():
             self.out.Re[idx]	    = self.Re
             self.out.T_hg[idx]	    = self.T_hg 
             self.out.v_coolant[idx] = self.v_coolant
+            self.out.T_wall_c[idx]  = self.T_wall_c
+            self.out.T_sat[idx]     = self.T_sat
+            self.out.q_c_max[idx]   = self.q_c_max
+            self.out.q_chf[idx]     = self.q_chf
+
+            for key, value in self.wall_stress.items():
+                if key == 'regime':
+                    self.out.regime[idx] = value
+                else:
+                    getattr(self.out, key)[idx] = value
+
+        if self.boiling:
+            x = self.geometry[sorted(self.chf_exceeded), 0] * 1e3
+            print('')
+            if len(x) > 0:
+                print('WARNING: critical heat flux exceeded in ', len(x), ' of ', len(self.geometry[:,1]), ' sections, between x = ', round(x[0], 1), ' and ', round(x[-1], 1), ' [mm]')
+                print('Wall temperatures in these sections are calculated without nucleate boiling. With film boiling they can be much higher')
+            elif np.any(np.isfinite(self.out.q_chf)):
+                print('Critical heat flux is not exceeded, highest heat flux is ', round(np.nanmax(self.out.q_c_max / self.out.q_chf) * 100), ' % of the critical heat flux')
+
+            if len(self.bulk_boiling) > 0:
+                print('WARNING: the coolant itself reaches its saturation temperature at x = ', round(self.geometry[self.bulk_boiling[0], 0] * 1e3, 1), ' [mm] and is kept there as a liquid')
+                print('Two-phase flow in the cooling channels is not modelled, results downstream of this point are not valid')
 
         # write to file in output folder
         self.out.write_csv()

@@ -23,15 +23,15 @@ import PropLibrary as proplib
 
 
 # CEA input
-fuel            = proplib.ethanol80               # choose existing fuel or oxidiser from rocketcea or create new fuel or oxidiser blend in PropLibrary
+fuel            = proplib.ethanol70               # choose existing fuel or oxidiser from rocketcea or create new fuel or oxidiser blend in PropLibrary
 ox              = 'N2O'
 hot_gas_method  = 'cinjarev'                         # use either 'cinjarev', 'standard-bartz' or 'modified-bartz'
 
 # Operating point of combustion chamber 
 eta_c_star      = 0.85                                # c* efficiency
 
-MR              = 5.13
-m_dot           = 0.566                                # total mass flow [kg/s]
+MR              = 4
+m_dot           = 0.450                                # total mass flow [kg/s]
 m_dot_f_ideal   = m_dot / (MR + 1)
 m_dot_f         = 0.113
 m_dot_ox        = m_dot - m_dot_f_ideal
@@ -39,18 +39,26 @@ Pc              = 34e5                               # Chamber pressure [Pa]
 
 # Coolant input
 cooling_fluid   = ['Ethanol', 'Water']                         # needs to be list of str, use CoolProp fluid names
-fluid_mass_frac = [0.8, 0.2]    			                 # mass fractions of the cooling fluid (needs to add up to 1)
+fluid_mass_frac = [0.7, 0.3]    			                 # mass fractions of the cooling fluid (needs to add up to 1)
 m_dot_coolant   = m_dot_f                 		 	 # mass flow through the cooling channels
-inlet_temp      = 322                     		 # inlet temperature [K]
+inlet_temp      = 288                     		 # inlet temperature [K]
 inlet_pressure  = 45e5                               # Cooling channel inlet pressure [Pa]
 
 cooling_method  = 'gnielinski'                       # use either 'gnielinski', 'dittus-boelter' or 'dittus-boelter-simple', pay attention to suitable Re number range
+boiling         = True                               # nucleate boiling at cooling channel walls above the saturation temperature of the coolant, False for forced convection only
+chf_method      = 'hall-mudawar'                            # critical heat flux of the coolant, use either 'meyer' (measured for ethanol), 'gambill' (any coolant, lowest values) or 'hall-mudawar' (mixture properties and channel diameter, corrected with the ethanol measurements)
 ambient_temp    = 288.15							 # ambient temperature for radiation boundary condition [K] (must be type float)!!
 
 # Film cooling settings for coolant originating at the injector face
 m_dot_film = 0.35 * m_dot_coolant                      # set mass flow to 0.0 to deactivate film cooing
 injection_velocity = 10								  # [m/s]
 injector_diameter  = 0.4e-3							  # [m]
+
+# Additional rings of film cooling ports in the chamber wall, which take their coolant from the cooling channels
+# one entry per ring: [x coordinate of the chamber contour as in the plots [m], mass flow [kg/s], injection velocity [m/s], port diameter [m]]
+# EXAMPLE of a ring 20 mm upstream of the throat: film_ports = [[-20e-3, 0.1 * m_dot_coolant, 10, 0.4e-3]]
+# film_ports = [[-50e-3, 0.25*m_dot_coolant, 10, 0.4e-3], [-10e-3, 0.1*m_dot_coolant, 10, 0.4e-3]]
+film_ports = []
 
 # Chamber geometry
 D_c       = 50e-3                                   # chamber diamter [m]
@@ -135,8 +143,6 @@ gas.calculate()
 # coolant Properties from CoolProp library
 coolant = Coolant(cooling_fluid, ws=fluid_mass_frac, P=inlet_pressure, T=inlet_temp)     
 
-# film cooling model
-film = FilmCooling(cea, coolant, injection_velocity, injector_diameter, D_c, m_dot - m_dot_film, m_dot_film)
-film.film_length()
-film.cooled_idx = np.where(geometry[:,0] - geometry[0,0] <= film.liquid_film_length)[0]       # film length is measured from the injector face, the first point of the contour
-film.gas_film(geometry)                                                                              # gaseous film downstream of the liquid film
+# film cooling model, the film from the injector face is the first ring of ports
+film = FilmCooling(cea, gas, coolant, geometry, m_dot, [[geometry[0,0], m_dot_film, injection_velocity, injector_diameter]] + film_ports)
+film.calculate()

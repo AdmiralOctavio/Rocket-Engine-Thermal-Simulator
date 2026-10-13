@@ -10,6 +10,8 @@ import numpy as np
 import CoolProp
 from CoolProp.CoolProp import PropsSI, get_fluid_param_string
 from functools import lru_cache
+from scipy.interpolate import PchipInterpolator
+from types import SimpleNamespace
 
 
 # Excess viscosity of liquid ethanol-water mixtures: Redlich-Kister expansion in the ethanol mole fraction with coefficients [a, b] for a + b/T.
@@ -24,21 +26,83 @@ def get_state(names):
     return CoolProp.AbstractState('HEOS', '&'.join(names))
 
 
-@lru_cache(maxsize=1024)
-def saturation_temperatures(names, zs, P):
-    # bubble and dew point temperature of a mixture at pressure P. Returns None if CoolProp does not converge, which happens close to and above the critical pressure
-    state = get_state(names)
-    state.unspecify_phase()
+@lru_cache(maxsize=None)
+def phase_envelope(names, zs):
+    # Bubble and dew line of a mixture, traced once by CoolProp from low pressure up to the critical point of the mixture. A flash calculation
+    # at every pressure is not used for this, since it often does not converge above 45 bar. Returns the highest pressure with two phases
+    # and the temperature [K], ln of the density [kg/m^3] and enthalpy [J/kg] of the saturated liquid and of the saturated vapour as functions of ln(P)
+    state = CoolProp.AbstractState('HEOS', '&'.join(names))
     state.set_mole_fractions(list(zs))
     try:
+        state.build_phase_envelope('none')
+    except ValueError:
+        raise ValueError('CoolProp can not trace the bubble and dew line of the coolant mixture ' + ' & '.join(names))
+
+    pe    = state.get_phase_envelope_data()
+    M     = state.molar_mass()
+    Q     = np.array(pe.Q)
+    data  = np.array([pe.p, pe.T, pe.rhomolar_liq, pe.rhomolar_vap, pe.hmolar_liq, pe.hmolar_vap])
+    lines = []
+
+    # CoolProp marks the dew line with Q = 1 and the bubble line with Q = 0. The saturated phase with the composition of the mixture is
+    # the denser one with the lower enthalpy on the bubble line and the other one on the dew line, whatever CoolProp calls them
+    for Q_line, rho_sat, h_sat in ((0, np.maximum, np.minimum), (1, np.minimum, np.maximum)):
+        P, T, rho_1, rho_2, h_1, h_2 = data[:, Q == Q_line]
+        # each line is used up to its highest pressure and sorted by pressure
+        order = np.arange(np.argmax(P) + 1) if P[0] < P[-1] else np.arange(len(P) - 1, np.argmax(P) - 1, -1)
+        lines.append((P[order][-1], PchipInterpolator(np.log(P[order]), np.array([T, np.log(rho_sat(rho_1, rho_2) * M), h_sat(h_1, h_2) / M]).T[order])))
+
+    (P_bubble, bubble), (P_dew, dew) = lines
+
+    return float(min(P_bubble, P_dew)), bubble, dew
+
+
+@lru_cache(maxsize=1024)
+def saturation_properties(names, zs, P):
+    # Saturated liquid and vapour of a pure fluid or mixture at pressure P: bubble and dew point temperature [K], density of liquid and vapour [kg/m^3],
+    # enthalpy of liquid and vapour [J/kg] and the critical pressure [Pa]. For a mixture the liquid is at its bubble point and the vapour at its
+    # dew point, both with the composition of the mixture. Returns None above the critical pressure, where there is no boiling
+    if len(names) == 1:
+        state = get_state(names)
+        state.unspecify_phase()
+        P_crit = state.p_critical()
+        if P >= P_crit:
+            return None
         state.update(CoolProp.PQ_INPUTS, P, 0)
-        T_bubble = state.T()
+        T, rho_l, h_l = state.T(), state.rhomass(), state.hmass()
         state.update(CoolProp.PQ_INPUTS, P, 1)
-        T_dew = state.T()
+        return T, T, rho_l, state.rhomass(), h_l, state.hmass(), P_crit
+
+    P_crit, bubble, dew = phase_envelope(names, zs)
+    if P >= P_crit:
+        return None
+    T_bubble, ln_rho_l, h_l = bubble(np.log(P))
+    T_dew, ln_rho_g, h_g    = dew(np.log(P))
+
+    return float(T_bubble), float(T_dew), float(np.exp(ln_rho_l)), float(np.exp(ln_rho_g)), float(h_l), float(h_g), P_crit
+
+
+def saturation_temperatures(names, zs, P):
+    # bubble and dew point temperature of a mixture at pressure P. Returns None above the critical pressure or if CoolProp can not trace the bubble and dew line
+    try:
+        sat = saturation_properties(names, zs, P)
     except ValueError:
         return None
 
-    return T_bubble, T_dew
+    return None if sat is None else sat[:2]
+
+
+@lru_cache(maxsize=None)
+def parachor(name):
+    # Parachor of a pure fluid, which links its surface tension to the molar densities of saturated liquid and vapour (Macleod-Sugden):
+    # sigma = (parachor * (rho_l - rho_g))^4. Taken from the surface tension at 0.8 times the critical temperature
+    state = get_state((name,))
+    state.unspecify_phase()
+    state.update(CoolProp.QT_INPUTS, 0, 0.8 * state.T_critical())
+    sigma, rho_l = state.surface_tension(), state.rhomolar()
+    state.update(CoolProp.QT_INPUTS, 1, 0.8 * state.T_critical())
+
+    return sigma**0.25 / (rho_l - state.rhomolar())
 
 
 def pure_boiling_point(name, P):
@@ -116,6 +180,7 @@ class Coolant():
 
         self.rho = state.rhomass()                       # density [kg/m^3]
         self.Cp  = state.cpmass()                        # specific heat at constant pressure [J/kg/K]
+        self.h   = state.hmass()                         # specific enthalpy [J/kg]
         self.MW  = state.molar_mass() * 1e3              # molar mass [g/mol]
         self.Pr  = self.Cp * self.mu / self.k            # Prandtl number
 
@@ -170,6 +235,23 @@ class Coolant():
         denom = phi @ self.zs
 
         return np.sum(self.zs * mu / denom), np.sum(self.zs * k / denom)
+
+
+    def saturation(self):
+        # Saturated state of the coolant at its pressure for the boiling models: bubble point temperature and boiling range [K], density of the saturated
+        # liquid and vapour [kg/m^3], enthalpy needed to heat the coolant to its bubble point and enthalpy of evaporation [J/kg], surface tension [N/m]
+        # and critical pressure [Pa]. Returns None above the critical pressure
+        sat = saturation_properties(self.names, tuple(self.zs), self.P)
+        if sat is None:
+            return None
+        T_bubble, T_dew, rho_l, rho_g, h_l, h_g, P_crit = sat
+
+        # The surface tension follows from the densities at saturation with the parachors of the components (Macleod-Sugden). The mixing rule
+        # used for sigma further down needs every component as a liquid on its own, which fails close to the critical point of a component
+        sigma = float(np.sum(self.zs * [parachor(name) for name in self.names]) * (rho_l - rho_g) / (self.MW * 1e-3))**4
+
+        return SimpleNamespace(T_bubble=T_bubble, dT_bp=max(T_dew - T_bubble, 0.0), rho_l=rho_l, rho_g=rho_g, dH_sub=max(h_l - self.h, 0.0), Hvap=h_g - h_l,
+                               sigma=sigma, P_crit=P_crit)
 
 
     # the following properties are only needed by the film cooling model

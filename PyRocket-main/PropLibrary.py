@@ -15,6 +15,7 @@ from rocketcea.cea_obj import CEA_Obj, add_new_fuel, add_new_oxidizer, add_new_p
 # ethanol blends
 ethanol90 = rocketcea.blends.newFuelBlend(fuelL=['C2H5OH', 'H2O'], fuelPcentL=[90,10]) 
 ethanol80 = rocketcea.blends.newFuelBlend(fuelL=['C2H5OH', 'H2O'], fuelPcentL=[80,20]) 
+ethanol70 = rocketcea.blends.newFuelBlend(fuelL=['C2H5OH', 'H2O'], fuelPcentL=[70,30]) 
 
 
 # methanol blends

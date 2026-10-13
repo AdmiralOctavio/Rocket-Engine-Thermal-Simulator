@@ -125,7 +125,7 @@ or after a set maximum number of iterations is reached. All settings for the 2D 
 all boundaries is calculated and used to determine the total heat flux, as well as the temperature increase of the cooling fluid as it passes throug each section. 
 
 ## Liquid Film Cooling Model
-Optional addition of film cooling to supplement regenerative cooling. This is an implementation of the analytical 0D liquid film cooling model proposed by [Shine et al](https://www.researchgate.net/publication/256718300_A_new_generalised_model_for_liquid_film_cooling_in_rocket_combustion_chambers).The model relies on an energy balance between the convective and radiative heat transfer of the combustion gases and the evaporation of the coolant. The model produces an estimate of the liquid film length and assumes that the temperature rise of the wall under the liquid film is very small. The liquid film cooling length and the resultant reduction in convective heat transfer coefficient are passed to the regenerative cooling method. Downstream of the liquid film the evaporated coolant forms a gaseous film, which lowers the gas temperature at the wall. Its effectiveness follows the turbulent boundary layer model of Librizzi and Cresci (see Goldstein, Film Cooling, 1971) and decays with the distance from the end of the liquid film. Reactions between the coolant and the combustion gas are not considered. 
+Optional addition of film cooling to supplement regenerative cooling. This is an implementation of the analytical 0D liquid film cooling model proposed by [Shine et al](https://www.researchgate.net/publication/256718300_A_new_generalised_model_for_liquid_film_cooling_in_rocket_combustion_chambers).The model relies on an energy balance between the convective and radiative heat transfer of the combustion gases and the evaporation of the coolant. The model produces an estimate of the liquid film length and assumes that the temperature rise of the wall under the liquid film is very small. The liquid film cooling length and the resultant reduction in convective heat transfer coefficient are passed to the regenerative cooling method. The wall under the liquid film does not see the combustion gas: its convective heat evaporates the film, so the wall faces coolant at saturation temperature there and is heated by radiation only. Downstream of the liquid film the evaporated coolant forms a gaseous film, which lowers the gas temperature at the wall. Its effectiveness follows the turbulent boundary layer model of Librizzi and Cresci (see Goldstein, Film Cooling, 1971) and decays with the distance from the end of the liquid film. Reactions between the coolant and the combustion gas are not considered. Besides the film from the injector face, rings of film cooling ports can be placed anywhere along the chamber contour ('film_ports' in config.py). The liquid film of each ring is calculated with the local conditions of the combustion gas, and the gaseous films of several rings are combined as proposed by Sellers. Ports in the chamber wall take their coolant from the cooling channels, so less coolant is left for the rest of the channel. The liquid film model is not validated for the high gas velocities at and downstream of the throat. 
 
 ### Plotting Options 
 Results of the full chamber simulation are saved in the target directory as a csv file. A select set of saved data is automatically plotted by calling 'PlottingFunctions.py'.
@@ -156,9 +156,52 @@ negative Nusselt numbers when the Reynolds number of the cooling fluid is too lo
 includes information about surface roughness, especially relevant for 3D printed designs. 
 
 
+### Nucleate Boiling and Critical Heat Flux
+Cooling channel walls above the saturation temperature of the coolant are cooled by subcooled nucleate boiling ('boiling' in config.py). The heat flux follows
+the correlation of Liu and Winterton (1991), which combines forced convection with the nucleate pool boiling correlation of Cooper. It is evaluated at every
+face of the channel walls in the 2D section, since the bottom of a channel can boil while the top does not. Boiling keeps the wall 10 to 30 K above the
+saturation temperature, which is much colder than with forced convection alone. Most of the heat then enters the coolant through the bottom of the channel.
+For coolant mixtures the saturation properties (bubble point, boiling range, densities, enthalpy of evaporation) are taken from the bubble and dew line of
+the mixture in CoolProp, and the boiling heat transfer is reduced with the correction of Thome and Shakir (1987).
+
+Nucleate boiling breaks down at the critical heat flux (CHF), where a vapour film starts to separate the coolant from the wall. The highest local heat flux
+at the channel walls of every section is compared to the CHF. Both are saved in the csv file and plotted ('chf.png'). Three correlations can be chosen
+with 'chf_method' in config.py:
+
+* 'meyer': correlation of Meyer, Linne and Rousar (NASA TM-1998-206612) for ethanol, based on the product of coolant velocity and subcooling with a correction for pressure. It reproduces their 38 tests in electrically heated tubes (2.4 mm diameter, 10 to 48 bar, 3 to 23 m/s, 18 to 200 K subcooling) within 20 %. The coolant only enters with its saturation temperature. Water in the ethanol is expected to increase the CHF, so the correlation should be on the safe side for ethanol-water mixtures.
+* 'gambill': superposition of Gambill (1963) of the CHF of pool boiling and the heat flux of forced convection, for any coolant. It uses the properties of the coolant mixture at saturation. On average it is 44 % below the ethanol measurements of Meyer et al.
+* 'hall-mudawar': correlation of Hall and Mudawar (2000) for subcooled water in tubes of 0.25 to 15 mm diameter, evaluated with the properties of the coolant mixture at saturation and the hydraulic diameter of the channel. On the ethanol measurements of Meyer et al. it is too high by a factor of 0.8 dT_sub^0.25 / v^0.2 (subcooling in K, velocity in m/s), which is 1.6 on average and grows with subcooling. For coolants based on ethanol the result is divided by this factor, which reproduces the 38 tests as well as the 'meyer' correlation does. The correlation is not too high for water, so the corrected value is probably still on the safe side for ethanol-water mixtures. It is the only method which is tied to the ethanol measurements and also follows the mixture properties and the channel size.
+
+The comparison of the three methods with the ethanol tests, including the correction factor of 'hall-mudawar', can be reproduced with 'ValidateCHF.py'.
+
+In sections where the CHF is exceeded nucleate boiling is not counted on: the section is solved again with forced convection only and a warning is given at
+the end of the run. These sections are shaded in 'temperature.png'. The heat transfer above the CHF is not modelled. Meyer et al. observed moderate excursions of the wall temperature above 17 bar and
+burnout of the tube at lower pressure, so the walls of these sections can be much hotter than calculated. All correlations come from uniformly heated
+round tubes. Comparing them to the local peak heat flux of a channel which is heated from one side is an assumption on the safe side.
+
+### Wall Stress Analysis
+For every section the temperature differences which drive the thermal stresses are taken from the 2D temperature field: the difference through the inner
+wall at the centre line of the cooling channel and the mean temperatures of inner wall, ribs and outer wall. They are saved in the csv file and plotted
+('wall_delta_T.png'). If the material has a yield strength in MaterialLib.py, 'StressAnalysis.py' estimates the elastic stresses at the hot gas side of
+the inner wall for steady state firing, with the wall free of stress at ambient temperature:
+
+* primary stresses (pressure): bending of the inner wall between two ribs under the pressure difference of coolant and hot gas (beam with fixed ends), and the hoop membrane stress of gas and coolant pressure carried by inner and outer wall together.
+* secondary stresses (temperature): the hot inner wall is held back by the colder ribs and outer wall in axial and hoop direction (mismatch), and the temperature difference through the inner wall bends it (gradient). Both are compressive at the hot gas side and are combined to a von Mises equivalent stress.
+
+With X = primary stress / yield strength and Y = secondary stress / yield strength (yield strength at the highest temperature of the hot gas side wall)
+every section is classified in the Bree diagram: elastic (X + Y < 1), shakedown (Y < 2 and X + Y/4 < 1, yields in the first firings only), plastic cycling
+(Y > 2 and X Y < 1, yields in every firing, life limited by low cycle fatigue) or ratcheting (the wall deforms further with every firing). The stresses
+are plotted in 'stress.png', the Bree diagram with one point per section in 'bree.png', and a summary is printed at the end of the run.
+
+This is a screening estimate and no replacement for a structural analysis. Sections do not interact, and loads from thrust, mounting and manifolds, the
+start up and shut down transients, stress concentrations at the channel corners and creep are not included. The Bree diagram assumes an elastic - perfectly
+plastic material with a constant yield strength. Wall temperatures of sections above the critical heat flux are not a prediction, and neither are their stresses.
+
 ### Using Material Library
 Four common rocket engine chamber matierals can be selected from MaterialLib.py, 'Ti-6Al-4V', 'IN718', 'CuCr1Zr' and 'SS 1.4404'. These can be selected in config.py.
-If a differnet material is desired, it can be added in MaterialLib.py, similar to the existing examples. 
+If a differnet material is desired, it can be added in MaterialLib.py, similar to the existing examples. Youngs modulus, poisson ratio, thermal expansion 
+coefficient (mean value from ambient temperature), yield and ultimate strength can be set as functions of temperature with 'temperature_dependent'. 
+The wall stress analysis needs all of them and is skipped for materials without a yield strength.
 
 
 ### Creating New Propellant Blends
@@ -201,6 +244,9 @@ This can either be caused by the solver not reaching a steady state solution or 
 
 The coolant properties are calculated with [CoolProp](http://www.coolprop.org/) in 'CoolantClass.py'. Two-phase flow is not modelled, so the simulation 
 stops with a ValueError once the coolant reaches its bubble point. Increase the coolant pressure or mass flow, or reduce the heat load. 
+This is about the bulk of the coolant, boiling at the walls of the cooling channels is covered by the nucleate boiling model. With the boiling model
+switched on the simulation does not stop: the coolant is kept just below its saturation temperature as a liquid and a warning is given at the end of
+the run. Results downstream of this point are not valid.
 For mixtures CoolProp only provides density, heat capacity and the boiling range. Viscosity and thermal conductivity are mixed from the pure fluid 
 values, with a correction for the high viscosity of ethanol-water mixtures. Other strongly non-ideal mixtures need their own correction in 'CoolantClass.py'
 

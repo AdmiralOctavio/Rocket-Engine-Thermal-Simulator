@@ -8,13 +8,22 @@
 # License:	GNU GENERAL PUBLIC LICENSE V3							#                                          
 #####################################################################
 
+import warnings
+import matplotlib
+
+# figures are only saved to file, no plot windows are opened during the run
+matplotlib.use('Agg')
+warnings.filterwarnings('ignore', message='FigureCanvasAgg is non-interactive')
+
 import config
 import RegenCooling as rc
 import PlottingFunctions as pl
+import StressAnalysis as stress
 
 # give terminal message about simulation settings
 config.settings.output_msg()
 config.output.output_msg()
+config.film.output_msg()
 
 # heat transfer sim
 sim = rc.HeatTransfer(
@@ -33,6 +42,8 @@ sim = rc.HeatTransfer(
     cool_model=config.cooling_method,
     eta_c_star=config.eta_c_star,
     film = config.film,
+    boiling=config.boiling,
+    chf_model=config.chf_method,
 )
 
 sim.run()
@@ -44,3 +55,10 @@ plot.pressure_plot()
 plot.heat_transfer_coeff_plot()
 plot.heat_flux_plot()
 plot.reynolds_plot()
+plot.chf_plot()
+plot.wall_delta_plot()
+plot.stress_plot()
+plot.bree_plot()
+
+# summary of the wall stress analysis
+stress.summary(config.output, config.material, config.ambient_temp)
