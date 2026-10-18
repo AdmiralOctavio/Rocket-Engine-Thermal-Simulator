@@ -11,6 +11,8 @@
 import numpy as np
 from scipy import optimize
 
+from CoolantClass import saturation_properties
+
 
 class FilmCooling():
 	def __init__(self, cea, gas, coolant, geometry, m_dot, ports):
@@ -47,13 +49,16 @@ class FilmCooling():
 			if idx > 0:
 				self.m_dot_ports[idx] += m_dot_c
 
-		# coolant boiling temperature and heat of evaporation taken from the dominant specie
-		idx = np.argmax(self.coolant.ws)						# index of dominant specie by mass fraction
-		self.T_sat   = self.coolant.Tbs[idx]								# boiling temperature of dominant specie
-
-		# mass averaged entalpy of evaporation [J/kg]
-		self.dH_evap = np.sum([self.coolant.Hvap_Tbs[i] * self.coolant.ws[i] for i in range(len(self.coolant.ws))])
-		self.dH_fg_star = self.dH_evap + self.coolant.Cp * (self.T_sat - self.coolant.T)
+		# The film boils at the static pressure of the combustion gas: bubble point temperature of the coolant mixture and enthalpy needed to
+		# heat the injected coolant and evaporate it completely [J/kg], at each point of the contour
+		self.T_sat      = np.zeros(len(x))
+		self.dH_fg_star = np.zeros(len(x))
+		for i, p_s in enumerate(self.gas.p_s):
+			sat = saturation_properties(self.coolant.names, tuple(self.coolant.zs), float(p_s))
+			if sat is None:
+				raise ValueError('Film cooling needs a liquid film: the chamber pressure is above the critical pressure of the coolant')
+			self.T_sat[i]      = sat[0]
+			self.dH_fg_star[i] = sat[5] - self.coolant.h
 
 		# Turbulence correction factor
 		e_t = 0.1		# using highest value found for small GOx/H2 engines found in literature
@@ -93,13 +98,13 @@ class FilmCooling():
 		# simple radiation model based on h2o and co2 emissions
 		R_c = self.geometry[idx,1]					# chamber radius
 
-		p_h2o = self.cea.mole_fractions[1]['H2O'][0] * self.gas.p_s[idx]
+		p_h2o = self.cea.mole_fractions['H2O'][0] * self.gas.p_s[idx]
 		# radiative heat flux of water molecules
 		q_rad = 5.74 * (p_h2o / 1e5 * R_c)**0.3 * (self.gas.T_s[idx]/100)**3.5
 
 		# check if CO2 is present in the exhaust
-		if '*CO2' in self.cea.mole_fractions[1]:
-			p_co2 = self.cea.mole_fractions[1]['*CO2'][0] * self.gas.p_s[idx]
+		if 'CO2' in self.cea.mole_fractions:
+			p_co2 = self.cea.mole_fractions['CO2'][0] * self.gas.p_s[idx]
 			# radiative heat flux of co2 molecules
 			q_rad += 4 * (p_co2/1e5 * R_c)**0.3 * (self.gas.T_s[idx]/100)**3.5
 
@@ -113,7 +118,7 @@ class FilmCooling():
 		q_rad = self.radiation(idx)
 
 		# gaseous films from further upstream lower the gas temperature at the wall
-		T_g = self.gas.T_aw[idx] - self.eta[idx] * (self.gas.T_aw[idx] - self.T_sat)
+		T_g = self.gas.T_aw[idx] - self.eta[idx] * (self.gas.T_aw[idx] - self.T_film[idx])
 
 		# darcy friction factor
 		func = lambda f: 1.93 * np.log(Re_g * np.sqrt(f)) - 0.537 - 1 / (np.sqrt(f))
@@ -122,7 +127,7 @@ class FilmCooling():
 		# Unmodified stanton number
 		St = 0.5 * fr * (1.2 + 11.8 * np.sqrt(0.5*fr) * (self.cea.Pr - 1) * (self.cea.Pr**(-1/3)))**(-1)
 		h_alpha = St * G_m * self.cea.Cp * self.K_t
-		F_St = self.cea.Cp / self.dH_fg_star * ((T_g - self.T_sat) + q_rad / h_alpha)
+		F_St = self.cea.Cp / self.dH_fg_star[idx] * ((T_g - self.T_sat[idx]) + q_rad / h_alpha)
 
 		# Stanton number correction
 		k_m = (self.cea.MW / self.coolant.MW)**0.6
@@ -130,7 +135,7 @@ class FilmCooling():
 
 		# coolant evaporation rate per wall area
 		h_alpha_film = St * St_St0 * G_m * self.cea.Cp * self.K_t
-		m_v = (q_rad + h_alpha_film * (T_g - self.T_sat)) / self.dH_fg_star
+		m_v = (q_rad + h_alpha_film * (T_g - self.T_sat[idx])) / self.dH_fg_star[idx]
 
 		return St_St0, m_v
 
@@ -147,6 +152,7 @@ class FilmCooling():
 		self.St_St0 = np.ones(len(x))							# Stanton number correction under a liquid film, 1.0 where the wall is dry
 		self.eta    = np.zeros(len(x))							# effectiveness of the gaseous films
 		self.liquid = np.zeros(len(x), dtype=bool)				# points of the contour where the wall is covered by a liquid film
+		self.T_film = np.copy(self.T_sat)						# coolant temperature at the wall: boiling liquid film, or its vapour as it left the liquid film
 		self.x_dry  = [x[-1]] * len(self.ports)					# end of the liquid film of each ring of ports
 
 		m_dot_l = 0.0											# liquid mass flow on the wall
@@ -165,6 +171,7 @@ class FilmCooling():
 				continue
 
 			self.liquid[i] = True
+			self.T_film[i] = self.T_sat[i]
 			self.St_St0[i], m_v = self.stanton_number(i)
 
 			# liquid film reaches the nozzle exit
@@ -184,11 +191,12 @@ class FilmCooling():
 					self.x_dry[j] = np.interp(s_dry, s, x)
 
 				# gaseous films of several rings are combined as proposed by Sellers: each film cools the gas left at the wall by the films upstream
-				self.eta = 1 - (1 - self.eta) * (1 - self.gas_film(s, r, s_dry, m_dot_v, self.m_dot_g[i]))
+				self.eta = 1 - (1 - self.eta) * (1 - self.gas_film(s, r, s_dry, m_dot_v, self.m_dot_g[i], self.T_sat[i]))
+				self.T_film[i+1:] = self.T_sat[i]
 				m_dot_l, m_dot_v, wet = 0.0, 0.0, []
 
 
-	def gas_film(self, s, r, s_dry, m_dot_v, m_dot_g):
+	def gas_film(self, s, r, s_dry, m_dot_v, m_dot_g, T_v):
 		# Effectiveness of the gaseous film downstream of the liquid film, where the evaporated coolant mixes with the combustion gas.
 		# Turbulent boundary layer model of Librizzi and Cresci (see Goldstein, Film Cooling, 1971): the boundary layer starts with the
 		# mass flow of the coolant vapour and grows by entrainment of combustion gas. The mixing is increased by the same turbulence
@@ -202,7 +210,7 @@ class FilmCooling():
 		gas = swept > 0
 		xi  = self.K_t * swept[gas] * (m_dot_v / (2 * np.pi * r[gas] * self.cea.mu))**(-0.25)
 
-		eta[gas] = 1 / (1 + self.cea.Cp / self.coolant.Cp_vapour(self.T_sat) * (0.329 * (4.01 + xi)**0.8 - 1))
+		eta[gas] = 1 / (1 + self.cea.Cp / self.coolant.Cp_vapour(T_v) * (0.329 * (4.01 + xi)**0.8 - 1))
 
 		return eta
 
@@ -210,4 +218,6 @@ class FilmCooling():
 	def output_msg(self):
 		for (idx, m_dot_c, v_c, d_inj), x_dry in zip(self.ports, self.x_dry):
 			print('Film cooling ports at x = ', round(self.geometry[idx,0] * 1e3, 1), ' [mm], liquid film ends at x = ', round(x_dry * 1e3, 1), ' [mm]')
+		if max(self.x_dry, default=-np.inf) > self.geometry[np.argmin(self.geometry[:,1]), 0]:
+			print('WARNING: the liquid film reaches the throat. Break up of the film by the accelerating gas is not modelled, wall temperatures under it can be much higher')
 		print('')

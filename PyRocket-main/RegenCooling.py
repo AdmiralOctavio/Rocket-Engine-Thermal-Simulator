@@ -128,7 +128,7 @@ class HeatTransfer():
 
         # the gaseous film lowers the gas temperature at the wall towards the temperature of the coolant vapour
         if eta > 0:
-            T_hg = T_hg - eta * (T_hg - self.film.T_sat)
+            T_hg = T_hg - eta * (T_hg - self.film.T_film[idx])
 
         return halpha * St_St0, T_hg
         
@@ -151,13 +151,13 @@ class HeatTransfer():
         # simple radiation model based on h2o and co2 emissions
         R_c = self.geometry[idx,1]					# chamber radius
 
-        p_h2o = self.cea.mole_fractions[1]['H2O'][0] * self.gas.p_s[idx]
+        p_h2o = self.cea.mole_fractions['H2O'][0] * self.gas.p_s[idx]
         # radiative heat flux of water molecules 
         q_rad = 5.74 * (p_h2o/1e5*R_c)**0.3 * (self.gas.T_s[idx]/100)**3.5
 
         # check if CO2 is present in the exhaust
-        if '*CO2' in self.cea.mole_fractions[1]:
-            p_co2 = self.cea.mole_fractions[1]['*CO2'][0] * self.gas.p_s[idx]
+        if 'CO2' in self.cea.mole_fractions:
+            p_co2 = self.cea.mole_fractions['CO2'][0] * self.gas.p_s[idx]
             # radiative heat flux of co2 molecules 
             q_rad += 4 * (p_co2/1e5*R_c)**0.3 * (self.gas.T_s[idx]/100)**3.5
     

@@ -12,8 +12,8 @@ PyRocket relies on several external libraries, as well as GMSH. The installation
 
 
 ### Installation on WINDOWS 10
-The rocektcea library relies on a FORTRAN compiler. It can be installed natively on Windows, but in my 
-expereince it is a lot easier to get it to run in a Linux subsystem. 
+The NASA CEA library ('pip install cea') comes precompiled and needs no FORTRAN compiler, so PyRocket also runs natively on Windows. 
+The installation in a Linux subsystem works as follows. 
 
 ```bash
     1. as admin, open PowerShell
@@ -205,8 +205,8 @@ The wall stress analysis needs all of them and is skipped for materials without 
 
 
 ### Creating New Propellant Blends
-In config.py any fuel and oxidiser present in [RocketCEA](https://rocketcea.readthedocs.io/en/latest/) can be input. If a new propellant is desired, it can be 
-created as a string input, as shown in the PropLibrary.py file. Several examples are already present of new chemicals, as well as propellant blends. 
+In config.py any fuel and oxidiser present in the thermo database of [NASA CEA](https://github.com/nasa/cea) can be input by its species name, e.g. 'N2O', 'O2(L)' or 'C2H5OH(L)'. 
+If a new propellant is desired, it can be created from its atoms and enthalpy of formation, as shown in the PropLibrary.py file. Several examples are already present of new chemicals, as well as propellant blends. 
 
 
 ## Returning cooling channels 

@@ -21,4 +21,4 @@ pip3 install scipy
 pip3 install CoolProp
 pip3 install matplotlib
 pip3 install fipy
-pip3 install rocketcea
+pip3 install cea

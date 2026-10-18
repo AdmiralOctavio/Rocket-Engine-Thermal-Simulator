@@ -256,18 +256,6 @@ class Coolant():
 
     # the following properties are only needed by the film cooling model
 
-    @property
-    def Tbs(self):
-        # boiling temperatures of the components at atmospheric pressure [K]
-        return [PropsSI('T', 'P', 101325, 'Q', 0, ID) for ID in self.IDs]
-
-
-    @property
-    def Hvap_Tbs(self):
-        # enthalpies of evaporation of the components at atmospheric pressure [J/kg]
-        return [PropsSI('H', 'P', 101325, 'Q', 1, ID) - PropsSI('H', 'P', 101325, 'Q', 0, ID) for ID in self.IDs]
-
-
     def Cp_vapour(self, T):
         # specific heat of the coolant vapour at temperature T, taken as ideal gas [J/kg/K]. Evaluated at low pressure, where every component is a gas
         return sum(w * PropsSI('CP0MASS', 'T', T, 'P', 1000, ID) for ID, w in zip(self.IDs, self.ws) if w > 0)
