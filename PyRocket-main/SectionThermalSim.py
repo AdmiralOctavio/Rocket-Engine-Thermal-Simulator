@@ -8,9 +8,12 @@
 # License:	GNU GENERAL PUBLIC LICENSE V3							#                                          
 #####################################################################
 
-from fipy import CellVariable, FaceVariable, Gmsh2D, TransientTerm, DiffusionTerm, ImplicitSourceTerm, Viewer
+from fipy import CellVariable, FaceVariable, Gmsh2D, TransientTerm, DiffusionTerm, ImplicitSourceTerm
 import numpy as np
 from matplotlib import pyplot as plt
+from matplotlib.tri import Triangulation
+from matplotlib.ticker import MaxNLocator, MultipleLocator
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 from Output import Settings2D
 from SectionMesh import get_section_mesh
@@ -200,6 +203,47 @@ class HeatEquationSolver():
             self.time_step /= step_down
 
 
+    def plot_section(self, mesh, phi, cmap='magma'):
+        # triangle vertex ids of each cell and the vertex coordinates
+        tri = np.asarray(mesh._orderedCellVertexIDs).T
+        vx, vy = mesh.vertexCoords
+
+        # average cell values onto the vertices so the field can be shaded smoothly
+        counts = np.bincount(tri.ravel(), minlength=len(vx))
+        T_vertex = np.bincount(tri.ravel(), weights=np.repeat(phi.value, 3), minlength=len(vx)) / np.maximum(counts, 1)
+
+        # mirror about the symmetry plane at x = 0 to show the full cooling channel, in [mm]
+        vx, vy = 1000 * np.concatenate((vx, -vx)), 1000 * np.concatenate((vy, vy))
+        tri = np.vstack((tri, tri + len(T_vertex)))
+        T_vertex = np.concatenate((T_vertex, T_vertex))
+
+        fig, ax = plt.subplots()
+        plot = ax.tripcolor(Triangulation(vx, vy, tri), T_vertex, shading='gouraud', cmap=cmap)
+        ax.set_aspect('equal')
+        ax.set_xlabel('x [mm]')
+        ax.set_ylabel('y [mm]')
+        # use the same tick spacing on both axes, sized to fit the shorter (y) axis
+        tick_step = np.diff(MaxNLocator(nbins=3, steps=[1, 2, 5, 10]).tick_values(vy.min(), vy.max()))[0]
+        ax.xaxis.set_major_locator(MultipleLocator(tick_step))
+        ax.yaxis.set_major_locator(MultipleLocator(tick_step))
+        divider = make_axes_locatable(ax)
+        fig.colorbar(plot, cax=divider.append_axes('right', size='3%', pad=0.1), label=phi.name)
+        self.plot_tracker(divider.append_axes('bottom', size='45%', pad=0.6))
+        fig.savefig(self.path + "/" + str(self.idx) + ".png", bbox_inches='tight')
+        plt.close(fig)
+
+    def plot_tracker(self, ax):
+        # small outline of the chamber contour with the position of this section along it, in [mm]
+        x, r = 1000 * self.cooling_geometry.geom[:, 0], 1000 * self.cooling_geometry.geom[:, 1]
+        x_s, r_s = x[self.idx], r[self.idx]
+
+        ax.fill(np.concatenate((x, x[::-1])), np.concatenate((r, -r[::-1])), facecolor='0.92', edgecolor='0.5', linewidth=1)
+        ax.plot([x_s, x_s], [-r_s, r_s], color='0.5', linewidth=0.8, linestyle='--')
+        ax.plot(x_s, r_s, 'o', color='tab:red', markersize=5, clip_on=False)
+        ax.text(x_s, -np.max(r), 'x = %.1f mm' % x_s, fontsize=8, va='top', ha='center')
+        ax.set_aspect('equal')
+        ax.axis('off')
+
     def run_sim(self):
         # generate mesh
         mesh = get_section_mesh(self.settings.cell_size, self.idx)
@@ -292,9 +336,7 @@ class HeatEquationSolver():
 
         if self.settings.save_fig:
             # save section temperature profile
-            viewer = Viewer(vars=phi, datamin=min(phi), datamax=max(phi))
-            viewer.plot(filename=(self.path + "/" + str(self.idx)))
-            plt.close()
+            self.plot_section(mesh, phi)
 
         if self.settings.log_thermocouples:
             # log temperature value at thermocouple locations for validation purposes

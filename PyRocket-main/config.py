@@ -21,17 +21,29 @@ from FilmCooling import FilmCooling
 import MaterialLib as matlib
 import PropLibrary as proplib
 
+# IMPORTANT OBSERVATIONS OF THIS TOOL
+# 
+# This tool has been used to design DLX-1000A, a regeneratively cooled Nitrous/Ethanol engine.
+# This tool originally predicted that CHF would be exceeded by a factor of around 2.5-3x around the throat and nozzle.
+# In practice, the engine survive without issue for a 2s and 3s test burn. Exceeding CHF would yield
+# failure within 0.1s, ergo either:
+# 1) CHF is being grossly underestimated
+# 2) CHF is not a critically defining factor of failure
+#
+# Please take this into consideration when simulating your own engines. 
+# - Flavio Cicero
+
 
 # CEA input
-fuel            = proplib.ethanol70               # choose existing fuel or oxidiser from rocketcea or create new fuel or oxidiser blend in PropLibrary
+fuel            = proplib.ethanol80               # choose existing fuel or oxidiser from rocketcea or create new fuel or oxidiser blend in PropLibrary
 ox              = 'N2O'
 hot_gas_method  = 'cinjarev'                         # use either 'cinjarev', 'standard-bartz' or 'modified-bartz'
 
 # Operating point of combustion chamber 
-eta_c_star      = 0.85                                # c* efficiency
+eta_c_star      = 0.90                                # c* efficiency
 
-MR              = 4
-m_dot           = 0.450                                # total mass flow [kg/s]
+MR              = 4.6
+m_dot           = 0.518                                # total mass flow [kg/s]
 m_dot_f_ideal   = m_dot / (MR + 1)
 m_dot_f         = 0.113
 m_dot_ox        = m_dot - m_dot_f_ideal
@@ -39,7 +51,7 @@ Pc              = 34e5                               # Chamber pressure [Pa]
 
 # Coolant input
 cooling_fluid   = ['Ethanol', 'Water']                         # needs to be list of str, use CoolProp fluid names
-fluid_mass_frac = [0.7, 0.3]    			                 # mass fractions of the cooling fluid (needs to add up to 1)
+fluid_mass_frac = [0.8, 0.2]    			                 # mass fractions of the cooling fluid (needs to add up to 1)
 m_dot_coolant   = m_dot_f                 		 	 # mass flow through the cooling channels
 inlet_temp      = 288                     		 # inlet temperature [K]
 inlet_pressure  = 45e5                               # Cooling channel inlet pressure [Pa]
@@ -76,11 +88,11 @@ material  = matlib.IN718                             # use entry from MaterialLi
 
 # cooling channel geometry; h_c, psi, t_w_i can be functions of x 
 n         = 20                                       # number of cooling channels [int]
-h_c       = 1e-3                                     # radial height of cooling channels [m] CAN BE FLOAT OR FUNCTION
+h_c       = 0.5e-3                                     # radial height of cooling channels [m] CAN BE FLOAT OR FUNCTION
 # EXAMPLE of function input for psi: psi = lambda x: 1/3 * (1 - 0.0001 * x) 
 psi       = 0.6                                      # fill factor of the cooling channels; fraction of the circumferecne covered by the cooling channels (0 - 1) CAN BE FLOAT OR FUNCTION
 t_w_i     = 0.5e-3                                   # inner chamber wall thickness [m] CAN BE FLOAT OR FUNCTION
-t_w_o     = 1.3e-3                                     # outer chamber wall thickness [m]
+t_w_o     = 1e-3                                     # outer chamber wall thickness [m]
 start_idx = -1										 # starting index, use 0 for injector side and -1 for nozzle
 
 # 2D Section Simulation settings
