@@ -216,10 +216,14 @@ class HeatEquationSolver():
         counts = np.bincount(tri.ravel(), minlength=len(vx))
         T_vertex = np.bincount(tri.ravel(), weights=np.repeat(phi.value, 3), minlength=len(vx)) / np.maximum(counts, 1)
 
-        # mirror about the symmetry plane at x = 0 to show the full cooling channel, in [mm]
-        vx, vy = 1000 * np.concatenate((vx, -vx)), 1000 * np.concatenate((vy, vy))
-        tri = np.vstack((tri, tri + len(T_vertex)))
-        T_vertex = np.concatenate((T_vertex, T_vertex))
+        # mirror about the symmetry plane at x = 0 to show the full cooling channel, then add the facing half
+        # of each neighbouring channel by rotating about the chamber axis by one channel pitch, in [mm]
+        pitch = self.cooling_geometry.psi_c[self.idx] + self.cooling_geometry.psi_w[self.idx]
+        rotate = lambda x, y, a: (np.cos(a) * x + np.sin(a) * y, -np.sin(a) * x + np.cos(a) * y)
+        copies = [(vx, vy), (-vx, vy), rotate(-vx, vy, pitch), rotate(vx, vy, -pitch)]
+        vx, vy = 1000 * np.concatenate([c[0] for c in copies]), 1000 * np.concatenate([c[1] for c in copies])
+        tri = np.vstack([tri + i * len(T_vertex) for i in range(len(copies))])
+        T_vertex = np.tile(T_vertex, len(copies))
 
         fig, ax = plt.subplots()
         plot = ax.tripcolor(Triangulation(vx, vy, tri), T_vertex, shading='gouraud', cmap=cmap)
