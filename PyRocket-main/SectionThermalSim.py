@@ -12,6 +12,9 @@ from fipy import CellVariable, FaceVariable, Gmsh2D, TransientTerm, DiffusionTer
 import numpy as np
 from matplotlib import pyplot as plt
 from matplotlib.tri import Triangulation
+from matplotlib.collections import LineCollection
+from matplotlib.colors import to_rgb
+from matplotlib.lines import Line2D
 from matplotlib.ticker import MaxNLocator, MultipleLocator
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
@@ -28,7 +31,7 @@ class HeatEquationSolver():
     Information from the previous time step is used for updating the boundary conditions and thermal conductivity of the material.
     The thermal diffusivity is assumed constant with temperature.
     """
-    def __init__(self, idx, gas, material, cooling_geometry, halpha_func, halpha_c_func, q_rad, coolant_temperature, ambient_temperature, path, settings, boiling_func=None):
+    def __init__(self, idx, gas, material, cooling_geometry, halpha_func, halpha_c_func, q_rad, coolant_temperature, ambient_temperature, path, settings, boiling_func=None, film=None):
         self.idx              = idx                      # location along the chamber contour
         self.gas              = gas                      # isentropic gas object
         self.material         = material                 # material object
@@ -41,7 +44,8 @@ class HeatEquationSolver():
         self.T_amb            = ambient_temperature      # ambient temperature around the thruster [K]
         self.settings         = settings
         self.path             = path                     # folder path for figures
-        self.boltzmann        = 5.67e-8			         # stefan boltzmann constant 
+        self.film             = film                     # film cooling object, only used for the figures; None or False without film cooling
+        self.boltzmann        = 5.67e-8			         # stefan boltzmann constant
 
 
     def heat_trans_coeffs(self, mesh, phi):
@@ -238,6 +242,23 @@ class HeatEquationSolver():
         x_s, r_s = x[self.idx], r[self.idx]
 
         ax.fill(np.concatenate((x, x[::-1])), np.concatenate((r, -r[::-1])), facecolor='0.92', edgecolor='0.5', linewidth=1)
+
+        if self.film:
+            # gaseous film along the wall, fading out with its effectiveness
+            segments = [np.column_stack((x[i:i+2], sign * r[i:i+2])) for i in range(len(x) - 1) for sign in (1, -1)]
+            colors   = [(*to_rgb('tab:cyan'), float(eta)) for eta in np.repeat(self.film.eta[:-1], 2)]
+            ax.add_collection(LineCollection(segments, colors=colors, linewidth=3, capstyle='butt', clip_on=False))
+
+            # liquid film from each ring of ports to where the wall falls dry
+            for (idx, *_), x_dry in zip(self.film.ports, self.film.x_dry):
+                x_l = np.append(x[(x >= x[idx]) & (x < 1000 * x_dry)], 1000 * x_dry)
+                r_l = np.interp(x_l, x, r)
+                for sign in (1, -1):
+                    ax.plot(x_l, sign * r_l, color='tab:blue', linewidth=3, solid_capstyle='butt', clip_on=False)
+
+            ax.legend(handles=[Line2D([], [], color='tab:blue', linewidth=3, label='Liquid film'),
+                               Line2D([], [], color='tab:cyan', linewidth=3, label='Gaseous film')],
+                      fontsize=7, frameon=False, loc='center left', bbox_to_anchor=(1.0, 0.5))
         ax.plot([x_s, x_s], [-r_s, r_s], color='0.5', linewidth=0.8, linestyle='--')
         ax.plot(x_s, r_s, 'o', color='tab:red', markersize=5, clip_on=False)
         ax.text(x_s, -np.max(r), 'x = %.1f mm' % x_s, fontsize=8, va='top', ha='center')

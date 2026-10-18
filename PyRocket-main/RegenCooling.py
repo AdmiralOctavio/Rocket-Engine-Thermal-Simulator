@@ -336,7 +336,7 @@ class HeatTransfer():
         self.sat = self.coolant.saturation() if self.boiling and self.coolant.phase == 'l' else None
         boiling  = self.heat_flux_boiling if self.sat is not None else None
 
-        solver = HeatEquationSolver(idx, self.gas, self.material, self.cooling_geometry, self.heat_trans_coeff_gas, self.heat_trans_coeff_coolant, self.q_rad, self.coolant.T, self.T_amb, self.out.folder_path, self.settings2D, boiling)
+        solver = HeatEquationSolver(idx, self.gas, self.material, self.cooling_geometry, self.heat_trans_coeff_gas, self.heat_trans_coeff_coolant, self.q_rad, self.coolant.T, self.T_amb, self.out.folder_path, self.settings2D, boiling, film=self.film)
         solver.run_sim()
 
         # highest local heat flux at the cooling channel walls with nucleate boiling, compared to the critical heat flux
