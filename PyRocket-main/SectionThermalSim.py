@@ -155,9 +155,9 @@ class HeatEquationSolver():
             eq.solve(var=phi)
             self.diff = np.max(np.abs(np.array(phi) - T_old))
 
-            # a boiling curve with kinks (beyond the CHF) can make the update cycle between two states: under-relaxed after 20 iterations.
-            # The termination criterion stays on the full update, so converged results do not depend on it
-            if step >= 20:
+            # safety net for boiling curves with kinks (beyond the CHF), which can make the update cycle between two states: under-relaxed after
+            # 100 iterations. The termination criterion stays on the full update, so converged results do not depend on it
+            if step >= 100:
                 phi.setValue(T_old + 0.3 * (np.array(phi) - T_old))
 
             if self.settings.print_result:

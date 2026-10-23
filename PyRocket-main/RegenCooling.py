@@ -315,10 +315,11 @@ class HeatTransfer():
         slope = (heat_flux(T_wall + dT) - q) / dT
 
         # Beyond the CHF the tangent of the boiling curve flips between the steep nucleate branch and the shallow post-CHF branch from one
-        # iteration to the next. There the secant to the coolant temperature is used instead, which is stable for a curve that never decreases
+        # iteration to the next. There the secant to the bubble point is used instead: it never predicts boiling heat flux below the bubble
+        # point, so the next iterate can not fall into forced convection only and jump back up again
         if q_chf is not None:
             post        = q > q_chf * (1 - 1e-9)
-            slope[post] = q[post] / np.maximum(T_wall[post] - self.coolant.T, 1.0)
+            slope[post] = q[post] / np.maximum(T_wall[post] - sat.T_bubble, 1.0)
 
         return q, slope
 
@@ -407,7 +408,7 @@ class HeatTransfer():
                 solver.boiling_func = None
                 solver.run_sim()
 
-            elif self.q_chf_post is not None and self.q_c_bottom > self.q_chf:
+            elif self.q_chf_post is not None and self.q_c_bottom > self.q_chf * (1 - 1e-6):
                 self.post_chf_sections.append(idx)
                 self.chf_state = 1
 

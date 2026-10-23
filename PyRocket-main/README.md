@@ -202,8 +202,8 @@ without boiling). The CHF correlations come from uniformly heated round tubes. A
 bottom than at the top and sides, so comparing its bottom wall with the CHF of a uniformly heated tube is still on the safe side.
 
 Beyond the CHF the slope of the boiling curve changes abruptly, which can make the iteration of the 2D section cycle between two states. The boundary
-condition of faces beyond the CHF is therefore linearised with the secant to the coolant temperature instead of the tangent, and the iteration is
-under-relaxed after 20 iterations. Converged results do not depend on either.
+condition of faces beyond the CHF is therefore linearised with the secant to the bubble point of the coolant instead of the tangent, and the
+iteration is under-relaxed after 100 iterations as a safety net. Converged results do not depend on either.
 
 ### Wall Stress Analysis
 For every section the temperature differences which drive the thermal stresses are taken from the 2D temperature field: the difference through the inner
