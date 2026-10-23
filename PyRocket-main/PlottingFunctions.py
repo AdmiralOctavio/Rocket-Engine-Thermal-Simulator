@@ -21,6 +21,8 @@ class Plotting1D():
         self.save = save
         self.show = show
         self.data = np.genfromtxt(save_path+'/sim_data.csv', delimiter=",", skip_header=1)
+        # column of the heat flux which is compared with the critical heat flux: mean at the channel bottom, or the highest local value in older files
+        self.q_chf_check = 31 if self.data.shape[1] > 31 else 14
 
 
     def temperature_plot(self):
@@ -32,9 +34,17 @@ class Plotting1D():
             # sections above the critical heat flux are solved without nucleate boiling, the wall temperatures there are not a prediction
             x   = config.geometry[:,0]*1e3
             dx  = x[1] - x[0]
-            chf = np.where((self.data[:,14] > self.data[:,15]) & (self.data[:,12] > self.data[:,13]))[0]
+            if self.data.shape[1] > 32:
+                # state of each section beyond the CHF: post-CHF branch or solved again without boiling
+                post = np.where(self.data[:,32] == 1)[0]
+                chf  = np.where(self.data[:,32] == 2)[0]
+            else:
+                post = []
+                chf  = np.where((self.data[:,self.q_chf_check] > self.data[:,15]) & (self.data[:,12] > self.data[:,13]))[0]
+            for i in post:
+                plt.axvspan(x[i] - dx/2, x[i] + dx/2, color='orange', alpha=0.15, linewidth=0, label='Beyond CHF, post-CHF boiling branch' if i == post[0] else None)
             for i in chf:
-                plt.axvspan(x[i] - dx/2, x[i] + dx/2, color='r', alpha=0.15, linewidth=0, label='CHF exceeded, solved without boiling' if i == chf[0] else None)
+                plt.axvspan(x[i] - dx/2, x[i] + dx/2, color='r', alpha=0.15, linewidth=0, label='Boiling limit exceeded, solved without boiling' if i == chf[0] else None)
         plt.xlabel('x coordinate [mm]')
         plt.ylabel('Temperature [$^\circ$C]')
         plt.legend(loc='best')
@@ -92,9 +102,14 @@ class Plotting1D():
     
 
     def chf_plot(self):
-        plt.plot(config.geometry[:,0]*1e3, self.data[:,14]/1e6, color='b', label='Highest heat flux at the channel wall')
+        plt.plot(config.geometry[:,0]*1e3, self.data[:,self.q_chf_check]/1e6, color='b', label='Mean heat flux at the channel bottom' if self.q_chf_check == 31 else 'Highest heat flux at the channel wall')
+        if self.q_chf_check == 31:
+            plt.plot(config.geometry[:,0]*1e3, self.data[:,14]/1e6, color='b', linestyle=':', linewidth=0.8, label='Highest local heat flux (channel corner, mesh dependent)')
         plt.plot(config.geometry[:,0]*1e3, self.data[:,15]/1e6, color='r', linestyle='--', label='Critical heat flux')
-        plt.plot(config.geometry[:,0]*1e3, self.data[:,15]/1e6 * 1.5, color='g', linestyle='--', label='1.5x Critical heat flux')
+        if getattr(config, 'post_chf', 'fallback') == 'meyer':
+            plt.plot(config.geometry[:,0]*1e3, self.data[:,15]/1e6 * 1.55, color='g', linestyle='--', label='Second excursion of the post-CHF branch, 1.55x CHF')
+        else:
+            plt.plot(config.geometry[:,0]*1e3, self.data[:,15]/1e6 * 1.5, color='g', linestyle='--', label='1.5x Critical heat flux')
         plt.xlabel('x coordinate [mm]')
         plt.ylabel('Heat flux [MW/m^2]')
         plt.legend(loc='best')

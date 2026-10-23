@@ -144,16 +144,19 @@ Especially for small chamber geomerties, the 'cinjarev' correlation is recommend
 
 
 ### Coolant Side Heat Transfer Coefficient Models
-Similar to the hot gas side, the convection of heat to the cooling fluid can be estimated using one of three Nusselt number correlations. 
+Similar to the hot gas side, the convection of heat to the cooling fluid can be estimated using one of four Nusselt number correlations. 
 
 * 'gnielinski'
+* 'gnielinski-rough'
 * 'dittus-boelter'
 * 'dittus-boelter-simple'
 
-These correlations have different ranges of applicability in terms of Reynolds number. Check the comments in RegenCooling.py for details. The 'gnielinski' model can lead to
-negative Nusselt numbers when the Reynolds number of the cooling fluid is too low. If this error is encountered, use the 'dittus-boelter-simple' correlation instead. The 
-'dittus-boelter' correlation also features a viscosity correction for the near-wall fluid film. In practive the 'gnielinski' model is the most accurate, if applicable, as it 
-includes information about surface roughness, especially relevant for 3D printed designs. 
+These correlations have different ranges of applicability in terms of Reynolds number. Check the comments in RegenCooling.py for details. 'gnielinski' covers laminar,
+transitional and turbulent flow: below Re = 2300 it uses developing laminar flow at constant wall temperature, which does not depend on the roughness, and between
+Re = 2300 and 4000 it interpolates linearly to the turbulent correlation. 'gnielinski-rough' uses the turbulent correlation down to Re = 2300 and holds it at that
+value for lower Re, for rough (e.g. 3D printed) channels which become turbulent at lower Reynolds numbers than smooth tubes. The 'dittus-boelter' correlations are
+only valid above Re = 1e4. The 'dittus-boelter' correlation also features a viscosity correction for the near-wall fluid film. In practice the 'gnielinski' models are
+the most accurate, if applicable, as they include the surface roughness through the friction factor, especially relevant for 3D printed designs. 
 
 
 ### Nucleate Boiling and Critical Heat Flux
@@ -164,9 +167,10 @@ saturation temperature, which is much colder than with forced convection alone. 
 For coolant mixtures the saturation properties (bubble point, boiling range, densities, enthalpy of evaporation) are taken from the bubble and dew line of
 the mixture in CoolProp, and the boiling heat transfer is reduced with the correction of Thome and Shakir (1987).
 
-Nucleate boiling breaks down at the critical heat flux (CHF), where a vapour film starts to separate the coolant from the wall. The highest local heat flux
-at the channel walls of every section is compared to the CHF. Both are saved in the csv file and plotted ('chf.png'). Three correlations can be chosen
-with 'chf_method' in config.py:
+Nucleate boiling breaks down at the critical heat flux (CHF), where a vapour film starts to separate the coolant from the wall. The mean heat flux at the
+bottom of the cooling channel, where the heat from the hot gas side enters the coolant, is compared to the CHF in every section. Both are saved in the csv
+file and plotted ('chf.png'). The highest local heat flux, in the corner between the bottom and the side of the channel, is saved and plotted for
+information only: it grows with mesh refinement, while the mean at the channel bottom converges. Three correlations can be chosen with 'chf_method' in config.py:
 
 * 'meyer': correlation of Meyer, Linne and Rousar (NASA TM-1998-206612) for ethanol, based on the product of coolant velocity and subcooling with a correction for pressure. It reproduces their 38 tests in electrically heated tubes (2.4 mm diameter, 10 to 48 bar, 3 to 23 m/s, 18 to 200 K subcooling) within 20 %. The coolant only enters with its saturation temperature. Water in the ethanol is expected to increase the CHF, so the correlation should be on the safe side for ethanol-water mixtures.
 * 'gambill': superposition of Gambill (1963) of the CHF of pool boiling and the heat flux of forced convection, for any coolant. It uses the properties of the coolant mixture at saturation. On average it is 44 % below the ethanol measurements of Meyer et al.
@@ -174,10 +178,32 @@ with 'chf_method' in config.py:
 
 The comparison of the three methods with the ethanol tests, including the correction factor of 'hall-mudawar', can be reproduced with 'ValidateCHF.py'.
 
-In sections where the CHF is exceeded nucleate boiling is not counted on: the section is solved again with forced convection only and a warning is given at
-the end of the run. These sections are shaded in 'temperature.png'. The heat transfer above the CHF is not modelled. Meyer et al. observed moderate excursions of the wall temperature above 17 bar and
-burnout of the tube at lower pressure, so the walls of these sections can be much hotter than calculated. All correlations come from uniformly heated
-round tubes. Comparing them to the local peak heat flux of a channel which is heated from one side is an assumption on the safe side.
+What happens beyond the CHF is chosen with 'post_chf' in config.py:
+
+* 'fallback': nucleate boiling is not counted on. A section whose mean heat flux at the channel bottom exceeds the CHF is solved again with forced
+  convection only. This is the most conservative choice and gives an upper bound of the wall temperature as long as there is no film boiling: the
+  wall gets much hotter than with boiling, and the coolant takes up less heat.
+* 'meyer': the boiling curve continues beyond the CHF as measured for ethanol at high pressure by Meyer, Linne and Rousar (NASA TM-1998-206612,
+  figure 6). Above 17 bar (250 psia) their tubes did not go into film boiling at the CHF: the wall temperature rose by 50 to 200 F, and the heat flux
+  then kept rising with the wall temperature up to a second excursion at about 1.6 times the CHF (35 bar, 11 m/s, test 23). Below 17 bar the tubes went
+  into film boiling and several burnt out. The measured branch is used face by face in the 2D section: up to the CHF of the section the heat flux
+  follows nucleate boiling, then it stays at the CHF over a first excursion of 45 K and rises linearly by one CHF per 295 K of wall temperature.
+  A section whose mean heat flux at the channel bottom exceeds 1.55 times the CHF is solved again with forced convection only, as with 'fallback'.
+  Below 17 bar coolant pressure the treatment is the same as 'fallback'. Only valid for coolants based on ethanol.
+
+The post-CHF branch comes from a single plotted test with SDA-3C ethanol (95 % ethanol, 5 % isopropyl alcohol) in a uniformly heated stainless steel
+tube of 2.4 mm diameter. Meyer et al. describe the other tests above 17 bar as behaving the same way, with irregular wall temperatures and pitched sounds
+from the test section, which can be a sign of flow instability. Water in the coolant, the rough rectangular channels heated from one side and other
+velocities and subcooling are not covered by the measurements. Treat 1.55 times the CHF as a limit and do not design for it.
+
+Sections beyond the CHF are listed at the end of the run and shaded in 'temperature.png': orange on the post-CHF branch, red where they were solved
+again without boiling. The state of every section is saved in the last column of the csv file (0 below the CHF, 1 on the post-CHF branch, 2 solved
+without boiling). The CHF correlations come from uniformly heated round tubes. A channel which is heated from one side has a higher heat flux at the
+bottom than at the top and sides, so comparing its bottom wall with the CHF of a uniformly heated tube is still on the safe side.
+
+Beyond the CHF the slope of the boiling curve changes abruptly, which can make the iteration of the 2D section cycle between two states. The boundary
+condition of faces beyond the CHF is therefore linearised with the secant to the coolant temperature instead of the tangent, and the iteration is
+under-relaxed after 20 iterations. Converged results do not depend on either.
 
 ### Wall Stress Analysis
 For every section the temperature differences which drive the thermal stresses are taken from the 2D temperature field: the difference through the inner
@@ -238,7 +264,7 @@ terminal output for the simulation. Set 'log_TC' to True to enable the output.
 This only applies to transient simulations with a set 'run_time'. The steady state is solved directly without time stepping: the boundary conditions are 
 part of the equation and the temperature dependent coefficients are updated between the solves until the temperature field stops changing. 
 
-This can either be caused by the solver not reaching a steady state solution or the time step being set too small. Abort the simulation and try again with a different adaptive time step configuration. The function 'adaptive_time_step' in 'SectionThermalSim.py' is responsible for setting the time step based on the previous solution. For better convergence behaviour reduce the value of 'step_up' in the 'adaptive_time_step' function (default is 1.2). 
+With a run time the section is marched in time from ambient temperature ('transient' in 'SectionThermalSim.py'). The boundary conditions are implicit in the wall temperature as in the steady state, so the solution can not oscillate. The time step starts at 'time_step' and grows by the factor 'adaptive_up' to at most 1/50 of the run time, so a section takes about 60 solves (about 1 s). A full transient run takes 2 to 3 minutes; sections above the critical heat flux are solved twice. If this is too slow, increase 'cell_size' or set 'save_fig' to False.
 
 ### Coolant is boiling
 

@@ -55,6 +55,8 @@ class Output1D:
         self.T_sat       = np.ndarray(len(self.geometry[:, 1]))
         self.q_c_max     = np.ndarray(len(self.geometry[:, 1]))
         self.q_chf       = np.ndarray(len(self.geometry[:, 1]))
+        self.q_c_bottom  = np.ndarray(len(self.geometry[:, 1]))
+        self.chf_state   = np.zeros(len(self.geometry[:, 1]), dtype=int)
 
         # wall temperatures and stresses from StressAnalysis.py, stresses stay nan for materials without a yield strength
         self.stress_keys = ['dT_wall', 'T_inner', 'T_rib', 'T_outer', 'sig_p_bend', 'sig_p_membrane', 'sig_grad', 'sig_mis_hoop', 'sig_mis_axial', 'sig_secondary', 'sig_y', 'X', 'Y', 'strain_range']
@@ -106,6 +108,8 @@ class Output1D:
                 " Bree Y",
                 " strain range",
                 " Bree regime",
+                " q_coolant_bottom_mean [W/m^2]",
+                " beyond CHF (0 no, 1 post-CHF branch, 2 solved without boiling)",
             ]
         )
 
@@ -131,6 +135,7 @@ class Output1D:
                 ]
                 + [getattr(self, key)[i] for key in self.stress_keys]
                 + [self.regime[i]]
+                + [self.q_c_bottom[i], self.chf_state[i]]
             )
 
         f.close()

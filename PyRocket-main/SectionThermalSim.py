@@ -118,36 +118,47 @@ class HeatEquationSolver():
         )
 
 
-    def steady_state(self, mesh, phi):
-        # Solves the steady state temperature field directly, without marching in time. The boundary conditions are part of the equation
-        # as heat sources of the cells at the wall and are implicit in the wall temperature, so the solution can not oscillate.
-        # Everything that depends on the temperature (heat transfer coefficients, thermal conductivity, radiation to ambient) is
-        # updated between the solves until the temperature field stops changing
+    def boundary_coefficients(self, mesh, phi):
+        # The boundary conditions k * dT/dn = h * (T_ref - T) + q as heat sources of the cells at the wall, implicit in the wall temperature,
+        # so the solution can not oscillate. Returns h and h * T_ref + q at the faces, zero for faces inside the wall, and the thermal
+        # conductivity at all faces. Everything that depends on the temperature (heat transfer coefficients, thermal conductivity,
+        # radiation to ambient) is evaluated with the current temperature field
         chamber = np.array(mesh.physicalFaces["ChamberWall"])
         outer   = np.array(mesh.physicalFaces["OuterWall"])
 
+        self.heat_trans_coeffs(mesh, phi)
+
+        T     = np.array(phi.faceValue)                        # temperature at the faces
+        k     = self.material.k(T)                             # thermal conductivity of the material (dependent on temperature)
+        h, T_ref = self.coolant_walls(mesh, T)                 # heat transfer coefficient and temperature of the gas or coolant at the boundary, zero for faces inside the wall
+        q     = np.zeros(len(T))                               # heat flux which does not depend on the wall temperature
+
+        h[chamber], T_ref[chamber], q[chamber] = self.halpha, self.T_hg, self.q_rad
+
+        # radiation boundary condition on the outside wall, written as a heat transfer coefficient
+        h[outer]     = self.boltzmann * self.material.eps * (T[outer]**2 + self.T_amb**2) * (T[outer] + self.T_amb)
+        T_ref[outer] = self.T_amb
+
+        return h, h * T_ref + q, k
+
+
+    def steady_state(self, mesh, phi):
+        # Solves the steady state temperature field directly, without marching in time. The boundary conditions are updated
+        # between the solves until the temperature field stops changing
         for step in range(self.settings.max_iter):
-            self.heat_trans_coeffs(mesh, phi)
-
-            T     = np.array(phi.faceValue)                        # temperature at the faces
-            k     = self.material.k(T)                             # thermal conductivity of the material (dependent on temperature)
-            h, T_ref = self.coolant_walls(mesh, T)                 # heat transfer coefficient and temperature of the gas or coolant at the boundary, zero for faces inside the wall
-            q     = np.zeros(len(T))                               # heat flux which does not depend on the wall temperature
-
-            h[chamber], T_ref[chamber], q[chamber] = self.halpha, self.T_hg, self.q_rad
-
-            # radiation boundary condition on the outside wall, written as a heat transfer coefficient
-            h[outer]     = self.boltzmann * self.material.eps * (T[outer]**2 + self.T_amb**2) * (T[outer] + self.T_amb)
-            T_ref[outer] = self.T_amb
-
-            # boundary condition k * dT/dn = h * (T_ref - T) + q as source terms of the cells at the boundary
-            implicit = (FaceVariable(mesh=mesh, value=h / k) * mesh.faceNormals).divergence
-            explicit = (FaceVariable(mesh=mesh, value=(h * T_ref + q) / k) * mesh.faceNormals).divergence
-            eq = DiffusionTerm(coeff=1.0) - ImplicitSourceTerm(coeff=implicit) + explicit == 0
+            h, hT, k = self.boundary_coefficients(mesh, phi)
+            implicit = (FaceVariable(mesh=mesh, value=h) * mesh.faceNormals).divergence
+            explicit = (FaceVariable(mesh=mesh, value=hT) * mesh.faceNormals).divergence
+            eq = DiffusionTerm(coeff=FaceVariable(mesh=mesh, value=k)) - ImplicitSourceTerm(coeff=implicit) + explicit == 0
 
             T_old = np.array(phi)
             eq.solve(var=phi)
             self.diff = np.max(np.abs(np.array(phi) - T_old))
+
+            # a boiling curve with kinks (beyond the CHF) can make the update cycle between two states: under-relaxed after 20 iterations.
+            # The termination criterion stays on the full update, so converged results do not depend on it
+            if step >= 20:
+                phi.setValue(T_old + 0.3 * (np.array(phi) - T_old))
 
             if self.settings.print_result:
                 print('iteration: ', step + 1, '	T max: ', round(float(np.max(np.array(phi))), 3), ' [K]')
@@ -189,22 +200,34 @@ class HeatEquationSolver():
         self.T_inner, self.T_rib, self.T_outer = (float(np.sum(T[part] * A[part]) / np.sum(A[part])) for part in (inner, rib, outer))
 
 
-    def adaptive_time_step(self, T_max, min_val=1, low_val=50, max_val=400):
-        # adaptive time step based on temperature development of the last two time steps
-        delta_T = T_max[-1] - T_max[-2]
-        step_down = 2
+    def transient(self, mesh, phi):
+        # Marches in time from ambient temperature up to the run time. The boundary conditions are implicit in the wall temperature as in
+        # the steady state and are updated every time step, so long time steps can not make the solution oscillate. The time step grows
+        # from its initial value by the factor adaptive_up to at most 1/50 of the run time, the last step ends exactly at the run time.
+        # The heat capacity is constant, the thermal conductivity depends on the temperature. The equation is built once, only the values
+        # of its coefficients are updated every time step
+        dt_max = self.settings.run_time / 50
+        dt     = self.settings.time_step
+        time   = 0
 
-        if delta_T < 0:
-            self.time_step /= step_down
-    
-        elif delta_T < min_val:
-            self.time_step *= 1.0
+        k  = FaceVariable(mesh=mesh, value=0.0)
+        h  = FaceVariable(mesh=mesh, value=0.0)
+        hT = FaceVariable(mesh=mesh, value=0.0)
+        eq = (TransientTerm(coeff=self.material.rho * self.material.Cp) == DiffusionTerm(coeff=k)
+              - ImplicitSourceTerm(coeff=(h * mesh.faceNormals).divergence) + (hT * mesh.faceNormals).divergence)
 
-        elif delta_T < low_val:
-            self.time_step *= self.settings.adaptive_up
+        while time < self.settings.run_time - 1e-12:
+            dt = min(dt, dt_max, self.settings.run_time - time)
+            h_value, hT_value, k_value = self.boundary_coefficients(mesh, phi)
+            h.setValue(h_value)
+            hT.setValue(hT_value)
+            k.setValue(k_value)
+            eq.solve(var=phi, dt=dt)
+            time += dt
+            dt   *= self.settings.adaptive_up
 
-        elif delta_T > max_val:
-            self.time_step /= step_down
+            if self.settings.print_result:
+                print('time: ', round(time, 3), ' [s]	T max: ', round(float(np.max(np.array(phi))), 3), ' [K]')
 
 
     def plot_section(self, mesh, phi, cmap='magma'):
@@ -279,56 +302,13 @@ class HeatEquationSolver():
         x, y = mesh.faceCenters
 
         # the steady state is solved directly, time stepping is only used if a run time is set
-        steady = self.settings.run_time == 'steady_state'
-        if steady:
+        if self.settings.run_time == 'steady_state':
             self.steady_state(mesh, phi)
+        else:
+            self.transient(mesh, phi)
 
+        # boundary fluxes of the final temperature field, used for the results below
         self.boundary_conditions(mesh, phi, x, y)
-
-        # Equation to solve
-        eq = TransientTerm() == DiffusionTerm(coeff=self.material.alpha)
-
-        running = not steady
-        T_max = [self.T_amb, self.T_amb]
-        time = 0
-        step = 0
-
-        # initalise first time step with value from settings 
-        self.time_step = self.settings.time_step
-
-        while running:
-            # update boundary conditions
-            self.boundary_conditions(mesh, phi, x, y)
-
-            # update time step
-            self.adaptive_time_step(T_max)
-
-            # solve equation and update time step
-            eq.solve(var=phi, dt=self.time_step)
-            time += self.time_step
-
-            # termination critera when steady state is approximately reached
-            diff = abs(T_max[-1] - max(phi))
-            if diff < self.settings.tolerance:
-                running = False 
-				
-			# terminate at specific run time if it is set
-            if self.settings.run_time != 'steady_state':
-                if time >= self.settings.run_time:
-                    running = False
-			
-			# terminate if maximum number of iterations is reached 
-            if step >= self.settings.max_iter:
-                print('No convergence reached after ', self.settings.max_iter, ' iterations. Error of last time step is ', diff)
-                print('Increase mesh resolution or decrease time step for better convergence behaviour')
-                running = False
-				
-            if self.settings.print_result:
-                print('time: ', round(time,3), ' [s]	T max: ', round(max(phi), 3), ' [K]')
-
-            T_max.append(max(phi))
-            step += 1 
-            self.diff = diff
 
         #self.phi = phi
         self.outer_wall_temp = max(phi.faceValue[mesh.physicalFaces["OuterWall"]])
@@ -349,13 +329,17 @@ class HeatEquationSolver():
         self.q_chamber   = self.material.k(phi.faceValue[mesh.physicalFaces["ChamberWall"]]) * dT_dn_chamber
         self.q_outer	 = self.material.k(phi.faceValue[mesh.physicalFaces["OuterWall"]]) * dT_dn_outer
 
-        # highest local heat flux into the coolant, which is the one to compare with the critical heat flux
+        # highest local heat flux into the coolant, in the corner of the channel. It depends on the mesh and is only saved for information
         self.q_c_max = float(max(max(self.q_c_top), max(self.q_c_bottom), max(self.q_c_side)))
 		
 		# total coolant side heat transferred [W/m]
-        self.Q_c = (2 * np.sum([self.q_c_top[i] * self.settings.cell_size for i in range(len(self.q_c_top))])
-		          + 2 * np.sum([self.q_c_bottom[i] * self.settings.cell_size for i in range(len(self.q_c_bottom))])
-				  + 2 * np.sum([self.q_c_side[i] * self.settings.cell_size for i in range(len(self.q_c_side))]))
+        A        = np.asarray(mesh.scaledFaceAreas)
+        self.Q_c = 2 * sum(float(np.sum(np.asarray(q) * A[np.array(mesh.physicalFaces[wall])]))
+                           for q, wall in ((self.q_c_top, "CoolantTopWall"), (self.q_c_bottom, "CoolantBottomWall"), (self.q_c_side, "CoolantSideWall")))
+
+        # mean heat flux into the coolant at the bottom of the channel, the wall above the hot gas side, which is compared with the critical heat flux
+        bottom = np.array(mesh.physicalFaces["CoolantBottomWall"])
+        self.q_c_bottom_mean = float(np.sum(np.asarray(self.q_c_bottom) * A[bottom]) / np.sum(A[bottom]))
 
         self.wall_temperatures(mesh, phi)
 

@@ -44,6 +44,7 @@ sim = rc.HeatTransfer(
     film = config.film,
     boiling=config.boiling,
     chf_model=config.chf_method,
+    post_chf=config.post_chf,
 )
 
 sim.run()
