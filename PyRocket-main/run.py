@@ -60,6 +60,7 @@ plot.chf_plot()
 plot.wall_delta_plot()
 plot.stress_plot()
 plot.bree_plot()
+plot.section_3d_plot()
 
 # summary of the wall stress analysis
 stress.summary(config.output, config.material, config.ambient_temp)

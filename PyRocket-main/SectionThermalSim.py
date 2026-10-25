@@ -230,14 +230,19 @@ class HeatEquationSolver():
                 print('time: ', round(time, 3), ' [s]	T max: ', round(float(np.max(np.array(phi))), 3), ' [K]')
 
 
-    def plot_section(self, mesh, phi, cmap='magma'):
-        # triangle vertex ids of each cell and the vertex coordinates
+    def vertex_field(self, mesh, phi):
+        # temperature field of the section on the mesh vertices: vertex coordinates [m], triangle vertex ids of each cell and the cell values
+        # averaged onto the vertices, so the field can be shaded smoothly
         tri = np.asarray(mesh._orderedCellVertexIDs).T
-        vx, vy = mesh.vertexCoords
-
-        # average cell values onto the vertices so the field can be shaded smoothly
+        vx, vy = (np.asarray(v) for v in mesh.vertexCoords)
         counts = np.bincount(tri.ravel(), minlength=len(vx))
         T_vertex = np.bincount(tri.ravel(), weights=np.repeat(phi.value, 3), minlength=len(vx)) / np.maximum(counts, 1)
+
+        return vx, vy, tri, T_vertex
+
+
+    def plot_section(self, mesh, phi, cmap='magma'):
+        vx, vy, tri, T_vertex = self.vertex_field(mesh, phi)
 
         # mirror about the symmetry plane at x = 0 to show the full cooling channel, then add the facing half
         # of each neighbouring channel by rotating about the chamber axis by one channel pitch, in [mm]
@@ -342,6 +347,7 @@ class HeatEquationSolver():
         self.q_c_bottom_mean = float(np.sum(np.asarray(self.q_c_bottom) * A[bottom]) / np.sum(A[bottom]))
 
         self.wall_temperatures(mesh, phi)
+        self.field = self.vertex_field(mesh, phi)          # temperature field of the section, saved for the 3D plot
 
         if self.settings.save_fig:
             # save section temperature profile

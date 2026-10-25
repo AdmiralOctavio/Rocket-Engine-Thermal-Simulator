@@ -131,6 +131,12 @@ Optional addition of film cooling to supplement regenerative cooling. This is an
 Results of the full chamber simulation are saved in the target directory as a csv file. A select set of saved data is automatically plotted by calling 'PlottingFunctions.py'.
 These include the heat transfer coefficients, coolant properties, as well as maximum wall temperature. 
 
+The 2D temperature field of every section is saved in 'section_fields.npz'. From it 'sections_3d.html' shows the sections joined along the chamber
+contour in 3D: a slice of the wall with three cooling channels and their ribs, coloured by temperature. The wall is transparent so the cooling
+channels can be seen through it. The file opens in a web browser, where the view can be rotated and zoomed and the temperature is shown under the
+cursor (it needs plotly in Python, and an internet connection to load plotly.js). The number of channels and the transparency can be changed with
+the arguments of 'section_3d_plot' in 'PlottingFunctions.py'.
+
 
 ### Chamber Side Heat Transfer Coefficient Models
 The heat flux to the combustion chamber is dominated by convective heat transfer, with some contribution from radiation. Three Nusselt number correlations can be chosen for 

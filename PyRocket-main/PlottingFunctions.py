@@ -239,6 +239,112 @@ class Plotting1D():
             plt.show()
         
 
+    def section_3d_plot(self, channels=3, opacity=0.35, samples=12):
+        # 3D view of the 2D sections joined along the chamber contour: a slice of the wall with a number of cooling channels and their ribs,
+        # coloured by temperature. The wall is transparent so that the cooling channels can be seen through it. Interactive html file, which
+        # opens in a web browser (needs an internet connection for plotly.js)
+        try:
+            import plotly.graph_objects as go
+        except ImportError:
+            print('The 3D plot of the sections needs plotly: pip install plotly')
+            return
+        from matplotlib.tri import LinearTriInterpolator, Triangulation
+
+        try:
+            data = np.load(self.save_path + '/section_fields.npz')
+        except FileNotFoundError:
+            print('No section fields found in ' + self.save_path + ', the 3D plot needs a run of the full chamber')
+            return
+
+        geom, cg = config.geometry, config.cooling_geom
+        sections = [i for i in range(len(geom[:,0])) if 'T' + str(i) in data]
+        s = np.linspace(0, 1, samples)
+
+        def field(i):
+            return data['x' + str(i)].astype(float), data['y' + str(i)].astype(float), data['tri' + str(i)], data['T' + str(i)].astype(float)
+
+        def boundary(i):
+            # points along the walls of half a section in its plane [m], as radius and angle from the centre line of the cooling channel
+            r_c  = geom[i,1]
+            r_ci = r_c + cg.t_w_i[i]
+            r_co = r_ci + cg.h_c[i]
+            r_o  = r_co + cg.t_w_o[i]
+            th_c = cg.psi_c[i] / 2
+            th_p = (cg.psi_c[i] + cg.psi_w[i]) / 2
+            walls = {'gas': (np.full_like(s, r_c), th_p * s), 'outer': (np.full_like(s, r_o), th_p * s), 'side': (r_c + (r_o - r_c) * s, np.full_like(s, th_p)),
+                     'channel top': (np.full_like(s, r_co), th_c * s), 'channel side': (r_co + (r_ci - r_co) * s, np.full_like(s, th_c)),
+                     'channel bottom': (np.full_like(s, r_ci), th_c * s)}
+            x, y, tri, T = field(i)
+            interp = LinearTriInterpolator(Triangulation(x, y, tri), T)
+            out = {}
+            for wall, (r, th) in walls.items():
+                px, py = r * np.sin(th), r * np.cos(th)
+                Tw = interp(px, py)
+                # points on the arcs can lie just outside the straight mesh edges: nearest vertex there
+                nearest = np.argmin((x[:,None] - px[None,:])**2 + (y[:,None] - py[None,:])**2, axis=0)
+                out[wall] = (px, py, np.where(np.ma.getmaskarray(Tw), T[nearest], np.ma.filled(Tw, 0.0)))
+            return out, th_p
+
+        def place(px, py, z, angle):
+            # point in the plane of a section to 3D [mm]: axial coordinate along x, around the chamber axis by angle, radius upwards
+            return z * np.ones_like(px), 1e3 * (px * np.cos(angle) + py * np.sin(angle)), 1e3 * (py * np.cos(angle) - px * np.sin(angle))
+
+        # copies of the half section: mirrored about the centre line of the channel and rotated by whole channel pitches
+        ks = np.arange(channels) - (channels - 1) / 2
+        halves = [(k, m) for k in ks for m in (1, -1)]
+
+        meshes = {'wall': [], 'channel': []}
+        def add(group, X, Y, Z, T, tri):
+            meshes[group].append((X, Y, Z, T, tri))
+
+        walls = [boundary(i) for i in sections]
+        z = geom[sections, 0] * 1e3
+        for name in ('gas', 'outer', 'side', 'channel top', 'channel side', 'channel bottom'):
+            group = 'channel' if name.startswith('channel') else 'wall'
+            for k, m in halves:
+                if name == 'side' and k * m != ks.max():
+                    continue                              # rib centre planes between the copies are inside the slice
+                X, Y, Z, T = [], [], [], []
+                for (w, th_p), zi in zip(walls, z):
+                    px, py, Tw = w[name]
+                    x3, y3, z3 = place(m * px, py, zi, 2 * k * th_p)
+                    X.append(x3); Y.append(y3); Z.append(z3); T.append(Tw)
+                X, Y, Z, T = (np.concatenate(a) for a in (X, Y, Z, T))
+                # two triangles between neighbouring points of neighbouring sections
+                a = np.arange(len(sections) - 1)[:,None] * samples + np.arange(samples - 1)[None,:]
+                a = a.ravel()
+                tri = np.vstack([np.column_stack([a, a + samples, a + samples + 1]), np.column_stack([a, a + samples + 1, a + 1])])
+                add(group, X, Y, Z, T, tri)
+
+        # the first and the last section close the slice
+        for i in (sections[0], sections[-1]):
+            x, y, tri, T = field(i)
+            th_p = (cg.psi_c[i] + cg.psi_w[i]) / 2
+            for k, m in halves:
+                X, Y, Z = place(m * x, y, geom[i,0] * 1e3, 2 * k * th_p)
+                add('wall', X, Y, Z, T, tri)
+
+        T_all = np.concatenate([part[3] for group in meshes.values() for part in group])
+        fig = go.Figure()
+        for group, alpha in (('channel', 1.0), ('wall', opacity)):
+            parts, n, X, Y, Z, T, tris = meshes[group], 0, [], [], [], [], []
+            for x3, y3, z3, Tp, tri in parts:
+                X.append(x3); Y.append(y3); Z.append(z3); T.append(Tp); tris.append(tri + n); n += len(x3)
+            X, Y, Z, T, tri = (np.concatenate(a) for a in (X, Y, Z, T, tris))
+            fig.add_trace(go.Mesh3d(x=X, y=Y, z=Z, i=tri[:,0], j=tri[:,1], k=tri[:,2], intensity=T, coloraxis='coloraxis', opacity=alpha,
+                                    flatshading=False, name='cooling channels' if group == 'channel' else 'wall',
+                                    hovertemplate='x = %{x:.1f} mm<br>T = %{intensity:.0f} K<extra>%{fullData.name}</extra>'))
+
+        fig.update_layout(title='Wall temperature along the chamber, ' + str(channels) + ' cooling channels',
+                          coloraxis=dict(colorscale='Magma', cmin=float(T_all.min()), cmax=float(T_all.max()), colorbar=dict(title='Temperature [K]')),
+                          scene=dict(xaxis_title='x coordinate [mm]', yaxis_title='[mm]', zaxis_title='radius [mm]', aspectmode='data',
+                                     camera=dict(eye=dict(x=0.55, y=-2.3, z=-1.25), center=dict(x=0, y=0, z=0), projection=dict(type='perspective'))),
+                          template='plotly_dark', margin=dict(l=0, r=0, t=40, b=0))
+        fig.write_html(self.save_path + '/sections_3d.html', include_plotlyjs='cdn', default_width='100%', default_height='96vh')
+        if self.show:
+            fig.show()
+
+
 def multi_plot(data1, data2, data3, data4, label1, label2, label3, label4):
     f, axes = plt.subplots(4, 1)
     #f.subplots_adjust(hspace = 0)
@@ -270,3 +376,4 @@ if __name__ == "__main__":
     plot.wall_delta_plot()
     plot.stress_plot()
     plot.bree_plot()
+    plot.section_3d_plot()

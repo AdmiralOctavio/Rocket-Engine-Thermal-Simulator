@@ -85,14 +85,14 @@ phi_conv  = 30                                       # convergence angle [deg]
 phi_div   = 24                                       # divergence angle [deg]
 phi_e     = 15                                       # exit angle [deg]
 step_size = 0.0025                                     # step size along the chamber contour [m]
-material  = matlib.IN718                             # use entry from MaterialLibrary. Make sure temperature dependent properties are specified
+material  = matlib.GRCop42                             # use entry from MaterialLibrary. Make sure temperature dependent properties are specified
 
 # cooling channel geometry; h_c, psi, t_w_i can be functions of x 
-n         = 20                                       # number of cooling channels [int]
+n         = 15                                       # number of cooling channels [int]
 h_c       = 1e-3                                     # radial height of cooling channels [m] CAN BE FLOAT OR FUNCTION
 # EXAMPLE of function input for psi: psi = lambda x: 1/3 * (1 - 0.0001 * x) 
-psi       = 0.60                                      # fill factor of the cooling channels; fraction of the circumferecne covered by the cooling channels (0 - 1) CAN BE FLOAT OR FUNCTION
-t_w_i     = 0.5e-3                                   # inner chamber wall thickness [m] CAN BE FLOAT OR FUNCTION
+psi       = 0.45                                      # fill factor of the cooling channels; fraction of the circumferecne covered by the cooling channels (0 - 1) CAN BE FLOAT OR FUNCTION
+t_w_i     = 0.9e-3                                   # inner chamber wall thickness [m] CAN BE FLOAT OR FUNCTION
 t_w_o     = 1.2e-3                                     # outer chamber wall thickness [m]
 start_idx = -1										 # starting index, use 0 for injector side and -1 for nozzle
 

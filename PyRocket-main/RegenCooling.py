@@ -418,6 +418,7 @@ class HeatTransfer():
         self.halpha    = solver.halpha			    # heat transfer coefficients taken as the of the boundary conditions of the 2D solver at the last timestep
         self.halpha_c  = solver.halpha_c_bottom		# average heat transfer coefficient at bottom wall
         self.T_hg      = solver.T_hg
+        self.field     = solver.field                   # temperature field of the section for the 3D plot
 
         # total heat flux into the inner chamber wall
         self.q 		   = np.mean(solver.q_chamber)
@@ -507,6 +508,7 @@ class HeatTransfer():
             self.out.q_chf[idx]     = self.q_chf
             self.out.q_c_bottom[idx] = self.q_c_bottom
             self.out.chf_state[idx]  = self.chf_state
+            self.out.fields[idx]     = self.field
 
             for key, value in self.wall_stress.items():
                 if key == 'regime':
@@ -533,5 +535,6 @@ class HeatTransfer():
 
         # write to file in output folder
         self.out.write_csv()
+        self.out.write_fields()
 
 

@@ -57,6 +57,7 @@ class Output1D:
         self.q_chf       = np.ndarray(len(self.geometry[:, 1]))
         self.q_c_bottom  = np.ndarray(len(self.geometry[:, 1]))
         self.chf_state   = np.zeros(len(self.geometry[:, 1]), dtype=int)
+        self.fields      = [None] * len(self.geometry[:, 1])                 # temperature field of every section, for the 3D plot
 
         # wall temperatures and stresses from StressAnalysis.py, stresses stay nan for materials without a yield strength
         self.stress_keys = ['dT_wall', 'T_inner', 'T_rib', 'T_outer', 'sig_p_bend', 'sig_p_membrane', 'sig_grad', 'sig_mis_hoop', 'sig_mis_axial', 'sig_secondary', 'sig_y', 'X', 'Y', 'strain_range']
@@ -68,6 +69,16 @@ class Output1D:
     def output_msg(self):
         print('Folder Path: 	', self.folder_path)
         print('')
+
+    def write_fields(self):
+        # 2D temperature field of every section: vertex coordinates [m], triangles and vertex temperatures [K], for the 3D plot
+        data = {}
+        for i, field in enumerate(self.fields):
+            if field is not None:
+                vx, vy, tri, T = field
+                data['x' + str(i)], data['y' + str(i)] = vx.astype(np.float32), vy.astype(np.float32)
+                data['tri' + str(i)], data['T' + str(i)] = tri.astype(np.int32), T.astype(np.float32)
+        np.savez_compressed(self.folder_path + '/section_fields.npz', **data)
 
     def write_csv(self):
         # open the file in the write mode
