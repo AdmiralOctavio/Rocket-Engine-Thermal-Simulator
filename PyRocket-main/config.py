@@ -114,7 +114,8 @@ TC_r   = [36e-3, 36e-3, 36e-3]                       # radial position of thermo
 
 
 # save folder path for output class
-save_path = "SectionImages"
+# SectionImages next to the PyRocket-main folder, whatever folder the program is started from
+save_path = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "SectionImages"))
 
 
 ######################################

@@ -9,6 +9,7 @@
 #                                                                   #
 #####################################################################
 
+import os
 import numpy as np
 from matplotlib import pyplot as plt
 
@@ -107,7 +108,8 @@ class ChamberGeometry():
         '''
         
         # This is meant to be able to import external CSV chamber contours
-        xy = np.genfromtxt('PyRocket-main\Contour.csv', delimiter = ',')
+        # the contour file next to this file, whatever folder the program is started from
+        xy = np.genfromtxt(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'Contour.csv'), delimiter = ',')
         xy = xy / 1000  # convert to meters
 
         x = xy[:,0]
