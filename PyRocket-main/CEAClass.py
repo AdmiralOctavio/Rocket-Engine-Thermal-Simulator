@@ -71,12 +71,14 @@ class CEA():
 		reactants = cea.Mixture(names)
 		products  = cea.Mixture(names, products_from_reactants=True)
 		solver    = cea.RocketSolver(products, reactants=reactants, transport=True)
+		# the frozen expansion only gives Isp and c*, and with transport properties on it does not converge for carbon propellants
+		solver_frz = cea.RocketSolver(products, reactants=reactants)
 
 		# equilibrium expansion for the gas properties, expansion with frozen composition for the performance
 		eq     = cea.RocketSolution(solver)
-		frozen = cea.RocketSolution(solver)
-		solver.solve(eq,     weights, self.chamber_pressure / 1e5, supar=[expansion_ratio], iac=True, hc=hc)
-		solver.solve(frozen, weights, self.chamber_pressure / 1e5, supar=[expansion_ratio], iac=True, hc=hc, n_frz=1)
+		frozen = cea.RocketSolution(solver_frz)
+		solver.solve(eq,         weights, self.chamber_pressure / 1e5, supar=[expansion_ratio], iac=True, hc=hc)
+		solver_frz.solve(frozen, weights, self.chamber_pressure / 1e5, supar=[expansion_ratio], iac=True, hc=hc, n_frz=1)
 		if not (eq.converged and frozen.converged):
 			raise ValueError('CEA did not converge, check propellants, mixture ratio and chamber pressure')
 
