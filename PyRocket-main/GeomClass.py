@@ -13,6 +13,9 @@ import os
 import numpy as np
 from matplotlib import pyplot as plt
 
+from Output import red_bold
+from StressAnalysis import x_ranges
+
 
 class ChamberGeometry():
     """[Summary]
@@ -152,11 +155,14 @@ class ChamberGeometry():
 class CoolingGeometry():
     """[Summary]
     Class to calculate the cooling channel shapes along the chamber contour. Currently limited to rectangular channels.
-    The input parameters 'h_c', 'psi' and 't_w_i' can be input as functions of the axial chamber coordinate. 
-    The location of thermocouples can be set to log the temperature of the 2D thermal sim at certain chamber locations. 
+    The input parameters 'h_c', 'psi', 't_w_i' and 'helix_angle' can be input as functions of the axial chamber coordinate.
+    The channels are straight and axial for a helix angle of 0, otherwise they wind around the chamber axis at the helix angle [deg],
+    measured from the axial direction at the centre of the channel. The 2D sections are then cross sections perpendicular to the channels:
+    'psi' is the same in both, but channels and ribs are narrower by cos(helix angle) than along the circumference of the chamber.
+    The location of thermocouples can be set to log the temperature of the 2D thermal sim at certain chamber locations.
     This is meant for program validation purposes and can be disabled in config.py.
     """
-    def __init__(self, chamber_geometry, h_c, psi, t_w_i, t_w_o, n_channels):
+    def __init__(self, chamber_geometry, h_c, psi, t_w_i, t_w_o, n_channels, helix_angle=0.0):
         self.geom       = chamber_geometry                                 # points along the chamber contour [x,y]
         self.n_channels = n_channels                                       # number of cooling channels
         
@@ -188,24 +194,65 @@ class CoolingGeometry():
         else: 
             raise ValueError('t_w_i must be a float or a function of x coordinate')
         
-        self.t_w_o = np.ones(len(self.geom[:,1])) * t_w_o              # outer chamber wall thickness [m] 
+        self.t_w_o = np.ones(len(self.geom[:,1])) * t_w_o              # outer chamber wall thickness [m]
 
-        self.psi_c = 2 * np.pi * self.psi / n_channels                 # radial section of single cooling channel 
-        self.psi_w = 2 * np.pi * (1 - self.psi) / n_channels           # raidal section of single uncooled wall segment
+        if isinstance(helix_angle, (int, float)):
+            # check if the helix angle is a single number
+            self.beta = np.ones(len(self.geom[:,1])) * np.radians(helix_angle)        # helix angle of the cooling channels [rad], 0 for axial channels
+        elif callable(helix_angle):
+            # check if the helix angle is a function pointer
+            self.beta = np.radians(helix_angle(self.geom[:,0])) * np.ones(len(self.geom[:,1]))
+        else:
+            raise ValueError('helix_angle must be a float or a function of x coordinate')
+
+        if np.any(self.beta < 0) or np.any(self.beta >= np.pi / 2):
+            raise ValueError('helix_angle must be at least 0 and below 90 degrees')
+
+        # angular sections of the 2D section mesh, which is the cross section perpendicular to the channels: narrower by cos(beta) for helical channels
+        self.psi_c = 2 * np.pi * self.psi / n_channels * np.cos(self.beta)             # radial section of single cooling channel
+        self.psi_w = 2 * np.pi * (1 - self.psi) / n_channels * np.cos(self.beta)       # raidal section of single uncooled wall segment
 
 
     def channel_geometry(self):
         # generate the cooling channel geometry; area, hydraulic diameter and wall thickness
-        self.r_i = self.geom[:,1] + self.t_w_i                                      # inner radius of cooling channels 
-        self.r_o = self.geom[:,1] + self.t_w_i + self.h_c                           # outer radius of cooling channels 
+        self.r_i = self.geom[:,1] + self.t_w_i                                      # inner radius of cooling channels
+        self.r_o = self.geom[:,1] + self.t_w_i + self.h_c                           # outer radius of cooling channels
 
-        self.A_c = self.psi_c / (self.psi_c + self.psi_w) * np.pi * (self.r_o**2 - self.r_i**2)                                                                 # cooling channel area [m^2]
-        self.U_c_top = self.psi_c * self.r_o										# circumference of top cooling channels 
-        self.U_c_bottom = self.psi_c * self.r_i										# circumference of bottom cooling channels 
-        self.U_c_side = self.h_c * 2												# circumference of side cooling channels 
+        self.A_c = 0.5 * self.psi_c * (self.r_o**2 - self.r_i**2) * self.n_channels   # flow area of all cooling channels, perpendicular to the flow [m^2]
+        self.U_c_top = self.psi_c * self.r_o										# circumference of top cooling channels
+        self.U_c_bottom = self.psi_c * self.r_i										# circumference of bottom cooling channels
+        self.U_c_side = self.h_c * 2												# circumference of side cooling channels
         self.U_c = (self.U_c_top + self.U_c_bottom + self.U_c_side)*self.n_channels # cooling channel circumference [m]
         self.D_h = 4 * self.A_c / self.U_c											# cooling channel hydraulic diameter [m]
-		
+
+        # A helix of radius r at the angle beta to its axis is curved with the radius r / sin(beta)^2, around the chamber axis. Infinite for axial
+        # channels; the curvature of the chamber contour itself is not included
+        r_m = 0.5 * (self.r_i + self.r_o)                                           # radius of the centre of the cooling channels [m]
+        with np.errstate(divide='ignore'):
+            self.R_curv = r_m / np.sin(self.beta)**2                                # radius of curvature of the cooling channels [m]
+
+        # angular position of the channels around the chamber axis [rad], from the first point of the contour: the channel advances
+        # by tan(beta) / r_m per length of the contour
+        ds = np.hypot(np.diff(self.geom[:,0]), np.diff(self.geom[:,1]))
+        dtheta = 0.5 * (np.tan(self.beta[1:]) / r_m[1:] + np.tan(self.beta[:-1]) / r_m[:-1]) * ds
+        self.twist = np.concatenate(([0.0], np.cumsum(dtheta)))
+
+
+    def check_size(self, min_size):
+        # Warning for cooling channels narrower or lower than min_size [m], which can not be depowdered reliably after printing. The width is
+        # taken at the bottom of the channel, where it is narrowest, perpendicular to the channel for helical channels
+        width = self.psi_c * self.r_i
+        small = np.where((width < min_size * (1 - 1e-9)) | (self.h_c < min_size * (1 - 1e-9)))[0]
+        if len(small) == 0:
+            return
+
+        x = self.geom[:,0] * 1e3
+        i_w, i_h = np.argmin(width), np.argmin(self.h_c)
+        print(red_bold('WARNING: cooling channels smaller than %g x %g mm in %d of %d sections, x = %s [mm]' % (min_size * 1e3, min_size * 1e3, len(small), len(x), x_ranges(x, small))))
+        print(red_bold('They may not be depowdered reliably. Narrowest channel %.2f mm wide at x = %.1f [mm], lowest channel %.2f mm high at x = %.1f [mm]'
+                       % (width[i_w] * 1e3, x[i_w], self.h_c[i_h] * 1e3, x[i_h])))
+        print('')
+
 
     def set_thermocouples(self, x, r):
         # set a number of thermocouples for validation purposes

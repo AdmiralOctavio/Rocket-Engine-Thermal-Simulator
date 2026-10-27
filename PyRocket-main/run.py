@@ -64,3 +64,6 @@ plot.section_3d_plot()
 
 # summary of the wall stress analysis
 stress.summary(config.output, config.material, config.ambient_temp)
+
+# cooling channels which are too small to be depowdered after printing
+config.cooling_geom.check_size(config.min_channel_size)

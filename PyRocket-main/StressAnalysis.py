@@ -103,7 +103,7 @@ class WallStress():
         r_c = geom.geom[idx, 1]                          # inner chamber radius
         t_i = geom.t_w_i[idx]
         t_o = geom.t_w_o[idx]
-        w   = geom.psi_c[idx] * (r_c + t_i)              # width of the cooling channel at the inner wall
+        w   = geom.psi_c[idx] * (r_c + t_i)              # width of the cooling channel at the inner wall, perpendicular to the channel
 
         # primary stresses: the inner wall between two ribs as a beam with fixed ends under the pressure difference of coolant and hot gas
         # (highest at the ribs), and the hoop force of gas and coolant pressure carried by inner and outer wall together

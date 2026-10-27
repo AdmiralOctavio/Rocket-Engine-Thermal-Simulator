@@ -239,7 +239,7 @@ class Plotting1D():
             plt.show()
         
 
-    def section_3d_plot(self, channels=3, opacity=0.35, samples=12):
+    def section_3d_plot(self, channels=15, opacity=0.35, samples=12):
         # 3D view of the 2D sections joined along the chamber contour: a slice of the wall with a number of cooling channels and their ribs,
         # coloured by temperature. The wall is transparent so that the cooling channels can be seen through it. Interactive html file, which
         # opens in a web browser (needs an internet connection for plotly.js)
@@ -263,6 +263,12 @@ class Plotting1D():
         def field(i):
             return data['x' + str(i)].astype(float), data['y' + str(i)].astype(float), data['tri' + str(i)], data['T' + str(i)].astype(float)
 
+        def section_plane(px, py, i):
+            # the 2D sections of helical channels are perpendicular to the channels, in the cross section of the chamber they are wider by
+            # 1 / cos(beta) around the chamber axis. No change for axial channels
+            r, th = np.hypot(px, py), np.arctan2(px, py) / np.cos(cg.beta[i])
+            return r * np.sin(th), r * np.cos(th)
+
         def boundary(i):
             # points along the walls of half a section in its plane [m], as radius and angle from the centre line of the cooling channel
             r_c  = geom[i,1]
@@ -282,14 +288,15 @@ class Plotting1D():
                 Tw = interp(px, py)
                 # points on the arcs can lie just outside the straight mesh edges: nearest vertex there
                 nearest = np.argmin((x[:,None] - px[None,:])**2 + (y[:,None] - py[None,:])**2, axis=0)
-                out[wall] = (px, py, np.where(np.ma.getmaskarray(Tw), T[nearest], np.ma.filled(Tw, 0.0)))
-            return out, th_p
+                out[wall] = (*section_plane(px, py, i), np.where(np.ma.getmaskarray(Tw), T[nearest], np.ma.filled(Tw, 0.0)))
+            return out, th_p / np.cos(cg.beta[i])
 
         def place(px, py, z, angle):
             # point in the plane of a section to 3D [mm]: axial coordinate along x, around the chamber axis by angle, radius upwards
             return z * np.ones_like(px), 1e3 * (px * np.cos(angle) + py * np.sin(angle)), 1e3 * (py * np.cos(angle) - px * np.sin(angle))
 
-        # copies of the half section: mirrored about the centre line of the channel and rotated by whole channel pitches
+        # copies of the half section: mirrored about the centre line of the channel and rotated by whole channel pitches. Helical channels
+        # are rotated further by their angular position around the chamber axis
         ks = np.arange(channels) - (channels - 1) / 2
         halves = [(k, m) for k in ks for m in (1, -1)]
 
@@ -305,9 +312,9 @@ class Plotting1D():
                 if name == 'side' and k * m != ks.max():
                     continue                              # rib centre planes between the copies are inside the slice
                 X, Y, Z, T = [], [], [], []
-                for (w, th_p), zi in zip(walls, z):
+                for (w, th_p), zi, i in zip(walls, z, sections):
                     px, py, Tw = w[name]
-                    x3, y3, z3 = place(m * px, py, zi, 2 * k * th_p)
+                    x3, y3, z3 = place(m * px, py, zi, 2 * k * th_p + cg.twist[i])
                     X.append(x3); Y.append(y3); Z.append(z3); T.append(Tw)
                 X, Y, Z, T = (np.concatenate(a) for a in (X, Y, Z, T))
                 # two triangles between neighbouring points of neighbouring sections
@@ -319,9 +326,10 @@ class Plotting1D():
         # the first and the last section close the slice
         for i in (sections[0], sections[-1]):
             x, y, tri, T = field(i)
-            th_p = (cg.psi_c[i] + cg.psi_w[i]) / 2
+            x, y = section_plane(x, y, i)
+            th_p = np.pi / cg.n_channels
             for k, m in halves:
-                X, Y, Z = place(m * x, y, geom[i,0] * 1e3, 2 * k * th_p)
+                X, Y, Z = place(m * x, y, geom[i,0] * 1e3, 2 * k * th_p + cg.twist[i])
                 add('wall', X, Y, Z, T, tri)
 
         T_all = np.concatenate([part[3] for group in meshes.values() for part in group])
@@ -335,7 +343,7 @@ class Plotting1D():
                                     flatshading=False, name='cooling channels' if group == 'channel' else 'wall',
                                     hovertemplate='x = %{x:.1f} mm<br>T = %{intensity:.0f} K<extra>%{fullData.name}</extra>'))
 
-        fig.update_layout(title='Wall temperature along the chamber, ' + str(channels) + ' cooling channels',
+        fig.update_layout(title='Wall temperature along the chamber, ' + str(channels) + (' helical' if np.any(cg.beta > 0) else '') + ' cooling channels',
                           coloraxis=dict(colorscale='Magma', cmin=float(T_all.min()), cmax=float(T_all.max()), colorbar=dict(title='Temperature [K]')),
                           scene=dict(xaxis_title='x coordinate [mm]', yaxis_title='[mm]', zaxis_title='radius [mm]', aspectmode='data',
                                      camera=dict(eye=dict(x=0.55, y=-2.3, z=-1.25), center=dict(x=0, y=0, z=0), projection=dict(type='perspective'))),

@@ -8,8 +8,19 @@
 # License:	GNU GENERAL PUBLIC LICENSE V3							#                                          
 #####################################################################
 
+import os
+import sys
 import numpy as np
 import csv
+
+
+def red_bold(text):
+    # red bold text for warnings in the terminal, plain text if the output is written to a file
+    if not sys.stdout.isatty():
+        return text
+    if os.name == 'nt':
+        os.system('')                                               # switches on the colour codes in the Windows console
+    return '\033[1;31m' + text + '\033[0m'
 
 
 # settings for 2D transient thermal sims 

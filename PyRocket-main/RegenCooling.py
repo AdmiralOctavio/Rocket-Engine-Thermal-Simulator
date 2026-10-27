@@ -141,11 +141,18 @@ class HeatTransfer():
         return scipy.optimize.fsolve(lambda f: -2 * np.log10(surface_roughness / (3.7 * self.D_h[idx]) + 2.51 / (Re * np.sqrt(f))) -1 / np.sqrt(f), 0.001)[0]
 
 
+    def curvature_factor(self, idx):
+        # Curvature of helical cooling channels: centrifugal forces drive secondary flows (Dean vortices) across the channel. Ratio of the friction
+        # factor of the curved channel to the straight one after Ito (1959), [Re (r/R)^2]^0.05 with the half width r = D_h/2 and the radius of
+        # curvature R, for turbulent flow. Held at 1 below Re (r/R)^2 = 1, which includes straight channels
+        return max(self.Re * (self.D_h[idx] / (2 * self.cooling_geometry.R_curv[idx]))**2, 1.0)**0.05
+
+
     def pressure_drop(self, idx):
-        # using Darcy Friction Factor to determine pressure drop
-        fd = self.friction_factor(idx, self.Re)
-        dp = fd * self.section_length[idx] / self.D_h[idx] * 0.5 * self.coolant.rho * self.v_coolant**2 
-        
+        # using Darcy Friction Factor to determine pressure drop, increased by the curvature of helical channels
+        fd = self.friction_factor(idx, self.Re) * self.curvature_factor(idx)
+        dp = fd * self.section_length[idx] / self.D_h[idx] * 0.5 * self.coolant.rho * self.v_coolant**2
+
         return dp, fd
 
         
@@ -199,7 +206,8 @@ class HeatTransfer():
             return (1 - gamma) * laminar(2300) + gamma * turbulent(4000)
 
 
-    def heat_trans_coeff_coolant(self, T_wall_coolant, idx):
+    def heat_trans_coeff_coolant(self, T_wall_coolant, idx, wall=None):
+        # wall: 'bottom', 'top' or 'side' wall of the cooling channel, only matters for the curvature of helical channels
         # coolant flow velocity based on bulk properteis
         self.v_coolant = self.m_dot_coolant / (self.coolant.rho * self.A_c[idx])
         self.Re = self.coolant.rho * self.v_coolant * self.D_h[idx] / self.coolant.mu
@@ -251,6 +259,14 @@ class HeatTransfer():
         
         # convert Nusselt number to heat transfer coefficient
         halpha = Nu * k / self.D_h[idx]
+
+        # Helical channels are curved around the chamber axis. The secondary flow drives the coolant towards the concave top wall, where the
+        # turbulence is enhanced, and away from the convex bottom wall on the hot gas side, where it is damped: Nusselt number multiplied and
+        # divided by the curvature factor, after Taylor. The side walls keep the value of a straight channel
+        if wall == 'top':
+            halpha = halpha * self.curvature_factor(idx)
+        elif wall == 'bottom':
+            halpha = halpha / self.curvature_factor(idx)
 
         if halpha < 0:
             raise ValueError('Negative heat transfer coefficient, check applicability of cooling model to Reynolds number range')
@@ -379,7 +395,7 @@ class HeatTransfer():
         # with the post-CHF branch, the boiling curve needs the CHF of this section before the section is solved. Above 17 bar only
         self.q_chf_post = None
         if self.sat is not None and self.post_chf == 'meyer' and self.coolant.P > POST_CHF_P_MIN:
-            self.q_chf_post = self.critical_heat_flux(self.heat_trans_coeff_coolant(self.coolant.T + 1.0, idx), idx)
+            self.q_chf_post = self.critical_heat_flux(self.heat_trans_coeff_coolant(self.coolant.T + 1.0, idx, 'bottom'), idx)
 
         solver = HeatEquationSolver(idx, self.gas, self.material, self.cooling_geometry, self.heat_trans_coeff_gas, self.heat_trans_coeff_coolant, self.q_rad, self.coolant.T, self.T_amb, self.out.folder_path, self.settings2D, boiling, film=self.film)
         solver.run_sim()
@@ -429,7 +445,7 @@ class HeatTransfer():
         # wall temperatures and stresses with the coolant pressure at the inlet of the section
         self.wall_stress = self.stress.section(idx, solver, self.coolant.P, self.gas.p_s[idx])
 		
-        # ensure that FiPy output object is actually a float, multiplied by the number of channels for total area
+        # ensure that FiPy output object is actually a float, multiplied by the number of channels for total area. Q_c is per length of the channel
         Q = float(solver.Q_c) * self.section_length[idx] * self.cooling_geometry.n_channels
 
  
@@ -449,8 +465,8 @@ class HeatTransfer():
         
         
     def run(self):
-        # arrays for section length and area in between the 2D sections solved in the thermal sim 
-        self.section_length     = np.ndarray(len(self.geometry[:,1]))
+        # arrays for section length and area in between the 2D sections solved in the thermal sim
+        self.section_length     = np.ndarray(len(self.geometry[:,1]))     # length of the cooling channels in each section [m]
         self.channel_length     = 0                                      # distance travelled by the coolant since the channel inlet [m]
         self.chf_exceeded       = []                                     # sections in which boiling can not carry the heat flux, solved again without boiling
         self.post_chf_sections  = []                                     # sections beyond the CHF on the post-CHF branch
@@ -475,12 +491,12 @@ class HeatTransfer():
                 self.section_length[idx] = 0
                 
             else:
-                # length of the contour between the section the coolant comes from and this one
+                # length of the contour between the section the coolant comes from and this one, helical channels are longer by 1 / cos(beta)
                 prev  = idx + 1 if self.settings2D.start_idx == -1 else idx - 1
                 x_len = (self.geometry[prev,0] - self.geometry[idx,0])**2
                 y_len = (self.geometry[prev,1] - self.geometry[idx,1])**2
-                
-                self.section_length[idx] = np.sqrt(x_len + y_len)
+
+                self.section_length[idx] = np.sqrt(x_len + y_len) / np.cos(self.cooling_geometry.beta[idx])
 
             self.channel_length += self.section_length[idx]
 
@@ -532,6 +548,12 @@ class HeatTransfer():
             if len(self.bulk_boiling) > 0:
                 print('WARNING: the coolant itself reaches its saturation temperature at x = ', round(self.geometry[self.bulk_boiling[0], 0] * 1e3, 1), ' [mm] and is kept there as a liquid')
                 print('Two-phase flow in the cooling channels is not modelled, results downstream of this point are not valid')
+
+        if np.any(self.cooling_geometry.beta > 0):
+            contour = np.sum(np.hypot(np.diff(self.geometry[:,0]), np.diff(self.geometry[:,1])))
+            print('')
+            print('Helical cooling channels: the coolant flows ', round(self.channel_length * 1e3, 1), ' [mm] along the channels, ', round(self.channel_length / contour, 2), ' times the length of the contour,')
+            print('and turns ', round(self.cooling_geometry.twist[-1] / (2 * np.pi), 2), ' times around the chamber axis')
 
         # write to file in output folder
         self.out.write_csv()

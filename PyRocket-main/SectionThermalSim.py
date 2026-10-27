@@ -51,9 +51,9 @@ class HeatEquationSolver():
     def heat_trans_coeffs(self, mesh, phi):
         # determine boundary heat transfer coefficients for coolant and chamber side
         self.halpha, self.T_hg = self.halpha_func(np.mean(phi.faceValue[mesh.physicalFaces["ChamberWall"]]), self.idx)                    # uses maxumum wall temperature to determine halpha
-        self.halpha_c_bottom   = self.halpha_c_func(np.mean(phi.faceValue[mesh.physicalFaces["CoolantBottomWall"]]), self.idx)            # uses maximum wall temperature at cooling channel bottom wall for viscosity correction in halpha_c function (if applicable)
-        self.halpha_c_top      = self.halpha_c_func(np.mean(phi.faceValue[mesh.physicalFaces["CoolantTopWall"]]), self.idx)            # uses maximum wall temperature at cooling channel bottom wall for viscosity correction in halpha_c function (if applicable)
-        self.halpha_c_side     = self.halpha_c_func(np.mean(phi.faceValue[mesh.physicalFaces["CoolantSideWall"]]), self.idx)            # uses maximum wall temperature at cooling channel bottom wall for viscosity correction in halpha_c function (if applicable)
+        self.halpha_c_bottom   = self.halpha_c_func(np.mean(phi.faceValue[mesh.physicalFaces["CoolantBottomWall"]]), self.idx, 'bottom')            # uses maximum wall temperature at cooling channel bottom wall for viscosity correction in halpha_c function (if applicable)
+        self.halpha_c_top      = self.halpha_c_func(np.mean(phi.faceValue[mesh.physicalFaces["CoolantTopWall"]]), self.idx, 'top')            # uses maximum wall temperature at cooling channel bottom wall for viscosity correction in halpha_c function (if applicable)
+        self.halpha_c_side     = self.halpha_c_func(np.mean(phi.faceValue[mesh.physicalFaces["CoolantSideWall"]]), self.idx, 'side')            # uses maximum wall temperature at cooling channel bottom wall for viscosity correction in halpha_c function (if applicable)
 
 
     def coolant_walls(self, mesh, T):
@@ -293,7 +293,9 @@ class HeatEquationSolver():
                       fontsize=7, frameon=False, loc='center left', bbox_to_anchor=(1.0, 0.5))
         ax.plot([x_s, x_s], [-r_s, r_s], color='0.5', linewidth=0.8, linestyle='--')
         ax.plot(x_s, r_s, 'o', color='tab:red', markersize=5, clip_on=False)
-        ax.text(x_s, -np.max(r), 'x = %.1f mm' % x_s, fontsize=8, va='top', ha='center')
+        beta = np.degrees(self.cooling_geometry.beta[self.idx])
+        ax.text(x_s, -np.max(r), 'x = %.1f mm' % x_s + (', helical channels at %.0f deg, section perpendicular to the channel' % beta if beta > 0 else ''),
+                fontsize=8, va='top', ha='center')
         ax.set_aspect('equal')
         ax.axis('off')
 
@@ -386,7 +388,7 @@ if __name__ == "__main__":
     def halpha_func(T, idx):
         return 1600, 2400
 
-    def halpha_c_func(T, idx):
+    def halpha_c_func(T, idx, wall=None):
         return 1113
 
     q_rad = 0

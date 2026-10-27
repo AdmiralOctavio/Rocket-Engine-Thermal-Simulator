@@ -91,6 +91,28 @@ produced using [GMSH](https://gmsh.info/). Several tutorials exist on how to use
 boundary conditions are applied, as well as the faces over which boundary fluxes along normal vectors are calculated. These can be found starting in line 52 and 126 respectively. 
 Changes to the mesh can be verified by running SectionThermalSim.py
 
+Powder has to be removed from the channels of printed chambers, which is not reliable for very small channels. If the channels anywhere along the
+contour are narrower or lower than 'min_channel_size' in config.py (1 mm by default), a warning in red is printed at the end of the run with the
+sections concerned and the smallest width and height. The width is taken at the bottom of the channel, where it is narrowest, and perpendicular to
+the channel for helical channels.
+
+
+### Helical cooling channels
+Setting 'helical' to True in config.py winds the cooling channels around the chamber axis instead of running them straight along it. 'helix_angle' is the
+angle between the channels and the chamber axis in degrees, at the centre of the channel. Like 'h_c', 'psi' and 't_w_i' it can be a function of the axial
+coordinate, e.g. to steepen the helix towards the throat. With 'helical' set to False the angle is ignored and the channels are axial. The number of channels
+and the fill factor 'psi' keep their meaning: 'psi' is the fraction of the circumference covered by the channels, which is the same in the cross section of the
+chamber and in the cross section perpendicular to the channels. With a helix angle beta:
+
+* the 2D sections are the cross sections perpendicular to the channels, in which the heat is conducted. Channels and ribs are narrower by cos(beta) than along the circumference. This is the width used for the flow area, the hydraulic diameter and the bending of the inner wall between two ribs in the stress analysis. The oblique cut of the chamber wall is slightly flatter than the chamber radius, this is neglected.
+* the flow area is smaller by cos(beta), so the coolant is faster for the same mass flow, with higher heat transfer coefficients and pressure drop.
+* the channels are longer than the contour by 1 / cos(beta). The coolant picks up the heat of the same chamber wall over the longer channel, the pressure drop is calculated over the length of the channel.
+* the channels are curved around the chamber axis with the radius r / sin(beta)^2. The secondary flow (Dean vortices) increases the friction factor by [Re (D_h / 2R)^2]^0.05 after Ito (1959). It drives the coolant towards the concave top wall of the channel, away from the axis, and away from the convex bottom wall on the hot gas side. After Taylor the heat transfer coefficient of the top wall is multiplied and that of the bottom wall divided by the same factor; the side walls keep the value of a straight channel. Both are held at 1 below Re (D_h / 2R)^2 = 1. For a coolant at Re = 10000 in a channel of 1.2 mm hydraulic diameter, 9.6 mm from the axis, the factor is 1.05 at 30 deg and 1.12 at 45 deg. The curvature of the chamber contour itself is not included, neither for axial nor for helical channels.
+
+The section images note the helix angle and show the cross section perpendicular to the channels. In 'sections_3d.html' the sections are widened by
+1 / cos(beta) back to the cross section of the chamber and rotated by the angular position of the channels, so the slice winds around the chamber.
+At the end of the run the length of the channels and the number of turns around the chamber axis are printed.
+
 
 ### 2D section solver 
 A transient thermal simulation is run on each section of the combustion chamber geomerty. Setting up the finite volume system and boundary conditions is done using 

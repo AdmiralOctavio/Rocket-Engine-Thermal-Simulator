@@ -98,7 +98,7 @@ def section_thermal_sim_test():
     def halpha_func(T, idx):
         return 1600, 2400
 
-    def halpha_c_func(T, idx):
+    def halpha_c_func(T, idx, wall=None):
         return 1113
 
     q_rad = 0

@@ -35,37 +35,37 @@ import PropLibrary as proplib
 
 
 # CEA input
-fuel            = proplib.ethanol80               # choose existing fuel or oxidiser from rocketcea or create new fuel or oxidiser blend in PropLibrary
+fuel            = proplib.ethanol80                         # choose existing fuel or oxidiser from rocketcea or create new fuel or oxidiser blend in PropLibrary
 ox              = 'N2O'
-hot_gas_method  = 'cinjarev'                         # use either 'cinjarev', 'standard-bartz' or 'modified-bartz'
+hot_gas_method  = 'cinjarev'                                # use either 'cinjarev', 'standard-bartz' or 'modified-bartz'
 
 # Operating point of combustion chamber 
-eta_c_star      = 0.90                                # c* efficiency
+eta_c_star      = 0.90                                      # c* efficiency
 
 MR              = 4.4
-m_dot           = 0.518                                # total mass flow [kg/s]
+m_dot           = 0.518                                     # total mass flow [kg/s]
 m_dot_f_ideal   = m_dot / (MR + 1)
 m_dot_f         = 0.113
 m_dot_ox        = m_dot - m_dot_f_ideal
-Pc              = 34e5                               # Chamber pressure [Pa]
+Pc              = 34e5                                      # Chamber pressure [Pa]
 
 # Coolant input
-cooling_fluid   = ['Ethanol', 'Water']                         # needs to be list of str, use CoolProp fluid names
-fluid_mass_frac = [0.8, 0.2]    			                 # mass fractions of the cooling fluid (needs to add up to 1)
-m_dot_coolant   = m_dot_f                 		 	 # mass flow through the cooling channels
-inlet_temp      = 288                     		 # inlet temperature [K]
-inlet_pressure  = 45e5                               # Cooling channel inlet pressure [Pa]
+cooling_fluid   = ['Ethanol', 'Water']                      # needs to be list of str, use CoolProp fluid names
+fluid_mass_frac = [0.8, 0.2]    			                # mass fractions of the cooling fluid (needs to add up to 1)
+m_dot_coolant   = m_dot_f                 		 	        # mass flow through the cooling channels
+inlet_temp      = 288                     		            # inlet temperature [K]
+inlet_pressure  = 45e5                                      # Cooling channel inlet pressure [Pa]
 
 cooling_method  = 'gnielinski-rough'                       # use either 'gnielinski', 'gnielinski-rough' (no laminar flow, for rough channels), 'dittus-boelter' or 'dittus-boelter-simple', pay attention to suitable Re number range
-boiling         = True                               # nucleate boiling at cooling channel walls above the saturation temperature of the coolant, False for forced convection only
-chf_method      = 'hall-mudawar'                            # critical heat flux of the coolant, use either 'meyer' (measured for ethanol), 'gambill' (any coolant, lowest values) or 'hall-mudawar' (mixture properties and channel diameter, corrected with the ethanol measurements)
-post_chf        = 'meyer'                            # beyond the critical heat flux, use either 'meyer' (ethanol above 17 bar keeps boiling up to 1.55x the CHF, measured by Meyer et al.) or 'fallback' (section solved again with forced convection only, the most conservative)
-ambient_temp    = 288.15							 # ambient temperature for radiation boundary condition [K] (must be type float)!!
+boiling         = True                                     # nucleate boiling at cooling channel walls above the saturation temperature of the coolant, False for forced convection only
+chf_method      = 'hall-mudawar'                           # critical heat flux of the coolant, use either 'meyer' (measured for ethanol), 'gambill' (any coolant, lowest values) or 'hall-mudawar' (mixture properties and channel diameter, corrected with the ethanol measurements)
+post_chf        = 'meyer'                                  # beyond the critical heat flux, use either 'meyer' (ethanol above 17 bar keeps boiling up to 1.55x the CHF, measured by Meyer et al.) or 'fallback' (section solved again with forced convection only, the most conservative)
+ambient_temp    = 288.15							       # ambient temperature for radiation boundary condition [K] (must be type float)!!
 
 # Film cooling settings for coolant originating at the injector face
-m_dot_film = 0.35 * m_dot_coolant                      # set mass flow to 0.0 to deactivate film cooing
-injection_velocity = 10								  # [m/s]
-injector_diameter  = 0.4e-3							  # [m]
+m_dot_film = 0.35 * m_dot_coolant                           # set mass flow to 0.0 to deactivate film cooing
+injection_velocity = 10								        # [m/s]
+injector_diameter  = 0.4e-3							        # [m]
 
 # Additional rings of film cooling ports in the chamber wall, which take their coolant from the cooling channels
 # one entry per ring: [x coordinate of the chamber contour as in the plots [m], mass flow [kg/s], injection velocity [m/s], port diameter [m]]
@@ -91,10 +91,16 @@ material  = matlib.GRCop42                             # use entry from Material
 n         = 15                                       # number of cooling channels [int]
 h_c       = 1e-3                                     # radial height of cooling channels [m] CAN BE FLOAT OR FUNCTION
 # EXAMPLE of function input for psi: psi = lambda x: 1/3 * (1 - 0.0001 * x) 
-psi       = 0.45                                      # fill factor of the cooling channels; fraction of the circumferecne covered by the cooling channels (0 - 1) CAN BE FLOAT OR FUNCTION
+psi       = 0.35                                      # fill factor of the cooling channels; fraction of the circumferecne covered by the cooling channels (0 - 1) CAN BE FLOAT OR FUNCTION
 t_w_i     = 0.9e-3                                   # inner chamber wall thickness [m] CAN BE FLOAT OR FUNCTION
 t_w_o     = 1.2e-3                                     # outer chamber wall thickness [m]
 start_idx = -1										 # starting index, use 0 for injector side and -1 for nozzle
+min_channel_size = 1e-3                              # smallest channel width and height which can be depowdered after printing [m], warning at the end of the run below it
+
+# helical cooling channels, which wind around the chamber axis instead of running straight along it
+# EXAMPLE of a helix angle rising towards the throat: helix_angle = lambda x: np.where(x < 0, 20 + 20 * (x + 0.1) / 0.1, 40)
+helical     = False                                  # True for helical cooling channels, False for straight axial channels
+helix_angle = 30.0                                   # angle between the channels and the chamber axis [deg], 0 - 90 (exclusive). CAN BE FLOAT OR FUNCTION
 
 # 2D Section Simulation settings
 cell_size    = 0.15 * t_w_i                          # cell size in 2D section solver, will heavily impact performance
@@ -135,7 +141,7 @@ chamber.plot_contour(save_path)
 geometry = chamber.geometry
 
 # generate cooling channel geometry
-cooling_geom = CoolingGeometry(geometry, h_c, psi, t_w_i, t_w_o, n)
+cooling_geom = CoolingGeometry(geometry, h_c, psi, t_w_i, t_w_o, n, helix_angle if helical else 0.0)
 cooling_geom.channel_geometry()
 cooling_geom.set_thermocouples(TC_x, TC_r)
 
